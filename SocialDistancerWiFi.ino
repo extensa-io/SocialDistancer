@@ -6,8 +6,9 @@
 const int redLedPin = 16;
 const int yellowLedPin = 13;
 const int greenLedPin = 12;
-const int motorLedPin = 5; // blue LED in dev
+const int vibrationPin = 5; // blue LED in dev
 const int piezoPin = 15;
+const int batteryPin = 0;
 
 // Inputs
 const int buttonPin = 4;
@@ -35,6 +36,7 @@ const int onDuration=750;
 const int periodDuration=1500;
 const int alarmFrequency = 550; //Hz
 boolean outputTone = false;  
+boolean outputVibration = false; 
 unsigned long lastLedPeriodStart = 0;
 const int ledPeriodDuration=200;
 int ledState = LOW;
@@ -59,7 +61,7 @@ void setup() {
   pinMode(redLedPin, OUTPUT);
   pinMode(yellowLedPin, OUTPUT);
   pinMode(greenLedPin, OUTPUT);
-  pinMode(motorLedPin, OUTPUT);
+  pinMode(vibrationPin, OUTPUT);
   pinMode(piezoPin, OUTPUT);
   
   pinMode(buttonPin, INPUT_PULLUP);
@@ -89,13 +91,11 @@ void loop() {
 
   if(reading == HIGH && previous == LOW){
     previous = HIGH;
-    digitalWrite(motorLedPin, LOW);
     CheckButton(millis());
   }
   else if (reading == LOW && previous == HIGH)
   {
     previous = LOW;
-    digitalWrite(motorLedPin, HIGH);
     buttonPressedStart = millis();
   }
 
@@ -129,9 +129,6 @@ void loop() {
         else if (powerPercentage > 65) {
           TriggerAlert(1, "HIGH ALERT ************ " + message);
         }
-        //else if (powerPercentage > 60) {
-        //  TriggerAlert(2, "MID alert ************ " + message);
-        //}
         else
         {   
           TriggerAlert(3, "MID alert ************ " + message);
@@ -211,6 +208,7 @@ void CheckButton(unsigned long currentMillis) {
   if(pushType == 3 && shortPushCounter == 1) {
     Serial.println("Long push - DEACTIVATE the TONE ALARM");
     shortPushCounter = 0;
+    noTone(piezoPin);
     toneAlarmActive = false;
     return;
   }
@@ -218,6 +216,8 @@ void CheckButton(unsigned long currentMillis) {
   if(pushType == 3 && shortPushCounter == 2) {
     Serial.println("Long push - DEACTIVATE both TONE ALARM and VIBRATION");
     shortPushCounter = 0;
+    noTone(piezoPin);
+    digitalWrite(vibrationPin, LOW);
     toneAlarmActive = false;
     vibrationAlarmActive = false;
     return;
@@ -265,22 +265,22 @@ void PlayAlarm(unsigned long currentMillis) {
       {
         lastSoundPeriodStart=currentMillis;
         noTone(piezoPin);
+        digitalWrite(vibrationPin, LOW);
         outputTone = false;
       }
     } else {
       if (currentMillis-lastSoundPeriodStart >= periodDuration) { // No tone, turn on if it's time 
         lastSoundPeriodStart+=periodDuration;
-        if (toneAlarmActive)
+        if(toneAlarmActive)
           tone(piezoPin, alarmFrequency, onDuration); // play 550 Hz tone in background for 'onDuration'
-         if(vibrationAlarmActive) {
-          // vibrate here
-         }
-         
+        if(vibrationAlarmActive)
+          digitalWrite(vibrationPin, HIGH);
         outputTone = true;
       }
     }
   }
 }
+  
 
 bool isSDnetwork(String wiFiSSID){
   
