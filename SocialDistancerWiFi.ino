@@ -18,7 +18,7 @@ const int shortPush = 200; //ms
 const int mediumPush = 1000; //ms
 const int longPush = 2000; //ms
 const int turnOffPush = 3000; //ms
-const int pushInterval = 300; // ms
+const int pushInterval = 450; // ms
 unsigned long lastShortPush = 0;
 unsigned long buttonPressedStart = 0;
 int shortPushCounter = 0;  
@@ -39,6 +39,9 @@ unsigned long lastLedPeriodStart = 0;
 const int ledPeriodDuration=200;
 int ledState = LOW;
 
+bool toneAlarmActive = true;
+bool vibrationAlarmActive = true;
+
 //Info variables
 unsigned long lastInfoPeriodOnStart = 0;
 unsigned long lastInfoPeriodOffStart = 0;
@@ -48,7 +51,7 @@ int infoLedState = LOW;
 
 // Snooze variables
 bool snoozed = false;
-const int snoozePeriod = 300000; // 5mins
+const int snoozePeriod = 5000; //300000; // 5mins
 unsigned long snoozePeriodStart = 0;
 
 void setup() {
@@ -96,7 +99,6 @@ void loop() {
     buttonPressedStart = millis();
   }
 
-/*
   if(snoozed) {
     if(millis() - snoozePeriodStart < snoozePeriod) {
       return;
@@ -105,11 +107,11 @@ void loop() {
       snoozed = false;
     }
   }
-*/ 
+ 
   int n = WiFi.scanNetworks(false, false, wifiChannel.channelNumber);
   
   if (n == 0) {
-    //TriggerAlert(0, ".");
+    TriggerAlert(0, ".");
   } else {
 
     for (int i = 0; i < n; ++i) {
@@ -150,7 +152,7 @@ void TriggerAlert(int alarm, String message){
       digitalWrite(yellowLedPin, LOW);
       digitalWrite(greenLedPin, LOW);
       PlayLed(redLedPin, currentMillis);
-      PlaySound(currentMillis);
+      PlayAlarm(currentMillis);
       break;
     case 2:
       digitalWrite(yellowLedPin, LOW);
@@ -176,7 +178,12 @@ void CheckButton(unsigned long currentMillis) {
   int pushType = 0;
   if(elapsedTime <= shortPush){
     pushType = 1;
-    shortPushCounter ++;
+    if (currentMillis - lastShortPush <= pushInterval) {
+      shortPushCounter ++;
+    }
+    else
+      shortPushCounter = 1;
+    lastShortPush = currentMillis;
   } else if (elapsedTime >= turnOffPush) {
     pushType = 4;
   } else if (elapsedTime >= longPush) {
@@ -184,49 +191,41 @@ void CheckButton(unsigned long currentMillis) {
   } else if (elapsedTime >= mediumPush) {
     pushType = 2;
   }
+  
+  if(pushType == 1 && shortPushCounter == 3){
+    TriggerAlert(0, "Let's Snooze");
 
-  
-  Serial.print(shortPushCounter);
-  Serial.print(" - ");
-  Serial.print(elapsedTime);
-  Serial.print(" - ");
-  Serial.print(pushType);
-  
-  if(pushType == 1){
-    if (currentMillis - lastShortPush <= pushInterval) {
-      Serial.println("Let's Snooze");
-    }
-    else
-    {
-      lastShortPush = currentMillis;
-      shortPushCounter = 0;
-    }
-    /*
+    shortPushCounter = 0;
     snoozePeriodStart = currentMillis;
     snoozed = true;
-    TriggerAlert(0, "Let's Snooze");
-    */
+
     return;
   }
 
-  if(pushType == 2) {
-    Serial.println("medium push - battery");
+  if(pushType == 2 & shortPushCounter == 0) {
+    Serial.println("medium push - battery indicator");
+    // call battery indicator here
     return;
   }
     
   if(pushType == 3 && shortPushCounter == 1) {
-    shortPushCounter = 0;
     Serial.println("Long push - DEACTIVATE the TONE ALARM");
+    shortPushCounter = 0;
+    toneAlarmActive = false;
     return;
   }
   
   if(pushType == 3 && shortPushCounter == 2) {
     Serial.println("Long push - DEACTIVATE both TONE ALARM and VIBRATION");
+    shortPushCounter = 0;
+    toneAlarmActive = false;
+    vibrationAlarmActive = false;
     return;
   }
   
-  if(pushType == 4) {
+  if(pushType == 4 && shortPushCounter == 0) {
     Serial.println("Turn off");
+    // call shut down here
     return;
   }
 }
@@ -258,20 +257,27 @@ void PlayInfoLed(unsigned long currentMillis) {
   }
 }
 
-void PlaySound(unsigned long currentMillis) {
-  
-  if (outputTone) {
-    if (currentMillis-lastSoundPeriodStart >= periodDuration) // tone is on, only turn off if it's been long enough
-    {
-      lastSoundPeriodStart=currentMillis;
-      noTone(piezoPin);
-      outputTone = false;
-    }
-  } else {
-    if (currentMillis-lastSoundPeriodStart >= periodDuration) { // No tone, turn on if it's time 
-      lastSoundPeriodStart+=periodDuration;
-      tone(piezoPin, alarmFrequency, onDuration); // play 550 Hz tone in background for 'onDuration'
-      outputTone = true;
+void PlayAlarm(unsigned long currentMillis) {
+
+  if(toneAlarmActive || vibrationAlarmActive) {
+    if (outputTone) {
+      if (currentMillis-lastSoundPeriodStart >= periodDuration) // tone is on, only turn off if it's been long enough
+      {
+        lastSoundPeriodStart=currentMillis;
+        noTone(piezoPin);
+        outputTone = false;
+      }
+    } else {
+      if (currentMillis-lastSoundPeriodStart >= periodDuration) { // No tone, turn on if it's time 
+        lastSoundPeriodStart+=periodDuration;
+        if (toneAlarmActive)
+          tone(piezoPin, alarmFrequency, onDuration); // play 550 Hz tone in background for 'onDuration'
+         if(vibrationAlarmActive) {
+          // vibrate here
+         }
+         
+        outputTone = true;
+      }
     }
   }
 }
