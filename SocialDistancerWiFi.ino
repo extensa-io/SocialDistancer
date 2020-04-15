@@ -48,8 +48,10 @@ bool vibrationAlarmActive = true;
 unsigned long lastInfoPeriodOnStart = 0;
 unsigned long lastInfoPeriodOffStart = 0;
 const int infoStandbyOn=300;
-const int infoStandbyOff=3000;
+const int infoStandbyOff[4] = { 0, 2000, 3500, 6000 }; //ms, based on battery level
 int infoLedState = LOW;
+int batteryCharge = 2;
+int infoCurrentLed; 
 
 // Snooze variables
 bool snoozed = false;
@@ -66,8 +68,8 @@ void setup() {
   pinMode(vibrationPin, OUTPUT);
   pinMode(piezoPin, OUTPUT);
   
-  pinMode(stayOnPin, OUTPUT);
-  digitalWrite(stayOnPin, HIGH);
+  //pinMode(stayOnPin, OUTPUT);
+  //digitalWrite(stayOnPin, HIGH);
   
   pinMode(buttonPin, INPUT_PULLUP);
   
@@ -93,13 +95,6 @@ void ActivateAccessPoint() {
   Serial.println("AP setup done"); 
   Serial.println("");
 }
-
-String ssidx;
-uint8_t encryptionType;
-int32_t RSSI;
-uint8_t* BSSID;
-int32_t channel;
-bool isHidden;
 
 void loop() {
 
@@ -271,14 +266,30 @@ void PlayInfoLed(unsigned long currentMillis) {
   {
     infoLedState = LOW; 
     lastInfoPeriodOffStart = currentMillis; 
+    digitalWrite(redLedPin, infoLedState);
+    digitalWrite(yellowLedPin, infoLedState);
     digitalWrite(greenLedPin, infoLedState);
   }
-  else if (infoLedState == LOW && currentMillis - lastInfoPeriodOffStart >= infoStandbyOff)
+  else if (infoLedState == LOW && currentMillis - lastInfoPeriodOffStart >=  infoStandbyOff[batteryCharge])
   {
+    switch( batteryCharge ){
+      case 3:
+        infoCurrentLed = greenLedPin;
+        break;
+      case 2:
+        infoCurrentLed = yellowLedPin;
+        break;
+      case 1:
+        infoCurrentLed = redLedPin;
+        break;
+      default:
+        infoCurrentLed = greenLedPin;
+        break;
+    }
+    Serial.printf("idle - Battery charge: %d\n", batteryCharge);
     infoLedState = HIGH; 
     lastInfoPeriodOnStart = currentMillis;
-    digitalWrite(greenLedPin, infoLedState);
-    Serial.println("idle");
+    digitalWrite(infoCurrentLed, infoLedState);
   }
 }
 
