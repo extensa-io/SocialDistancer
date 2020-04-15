@@ -3,7 +3,7 @@
  *************************************************/
 
 #ifndef APSSID
-#define APSSID "SDTech"
+#define APSSID "Sx"
 #endif
 
 #ifndef MAX_POWER_LEVEL

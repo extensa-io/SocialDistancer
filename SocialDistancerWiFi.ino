@@ -8,7 +8,7 @@ const int yellowLedPin = 13;
 const int greenLedPin = 12;
 const int vibrationPin = 5; // blue LED in dev
 const int piezoPin = 15;
-const int batteryPin = 0;
+const int stayOnPin = 0; // NOT DEFINED YET
 
 // Inputs
 const int buttonPin = 4;
@@ -25,7 +25,7 @@ unsigned long buttonPressedStart = 0;
 int shortPushCounter = 0;  
 
 //AP variables
-const WLANchannel wifiChannel = WiFiChannels[9];
+const WLANchannel wifiChannel = WiFiChannels[11];
 const int powerLevel = 10;
 String ssid = APSSID;
 byte mac[6];
@@ -56,6 +56,8 @@ bool snoozed = false;
 const int snoozePeriod = 5000; //300000; // 5mins
 unsigned long snoozePeriodStart = 0;
 
+void TriggerAlert(int alarm, String message = "");
+
 void setup() {
   
   pinMode(redLedPin, OUTPUT);
@@ -64,9 +66,14 @@ void setup() {
   pinMode(vibrationPin, OUTPUT);
   pinMode(piezoPin, OUTPUT);
   
+  pinMode(stayOnPin, OUTPUT);
+  digitalWrite(stayOnPin, HIGH);
+  
   pinMode(buttonPin, INPUT_PULLUP);
   
   Serial.begin(115200);
+  WiFi.enableAP(true);
+  delay(100);
   
   WiFi.mode(WIFI_STA);
   
@@ -79,11 +86,20 @@ void ActivateAccessPoint() {
   WiFi.macAddress(mac);
   
   WiFi.setOutputPower(powerLevel); 
+  String netname = ssid + macToString(mac);
 
-  Serial.println(WiFi.softAP(ssid + macToString(mac), "", wifiChannel.channelNumber) ? ssid + " AP Ready" : "AP Failed!");
+  Serial.println(WiFi.softAP(netname, "", wifiChannel.channelNumber, true) ? netname + " AP Ready" : "AP Failed!"); // hidden
+  delay(500);
   Serial.println("AP setup done"); 
   Serial.println("");
 }
+
+String ssidx;
+uint8_t encryptionType;
+int32_t RSSI;
+uint8_t* BSSID;
+int32_t channel;
+bool isHidden;
 
 void loop() {
 
@@ -108,18 +124,24 @@ void loop() {
     }
   }
  
-  int n = WiFi.scanNetworks(false, false, wifiChannel.channelNumber);
+  int n = WiFi.scanNetworks(false, true, wifiChannel.channelNumber); // sync, hidden
+  
+  String ssidx;
+  uint8_t encryptionType;
+  int32_t RSSI;
+  uint8_t* BSSID;
+  int32_t channel;
+  bool isHidden;
   
   if (n == 0) {
-    TriggerAlert(0, ".");
+    TriggerAlert(0);
   } else {
 
     for (int i = 0; i < n; ++i) {
-
-      if (isSDnetwork(WiFi.SSID(i)))
+      
+      if (WiFi.isHidden(i))
       {
         int powerPercentage = calculatePercentage(abs(WiFi.RSSI(i)));
-        double distance = calculateDistance(abs(WiFi.RSSI(i))) ;
         
         String message = WiFi.SSID(i); // + " " + WiFi.RSSI(i) + "dBm - Distance: " + String(distance) + " - Percentage: " + powerPercentage;
   
@@ -141,9 +163,11 @@ void loop() {
 }// loop
 
 void TriggerAlert(int alarm, String message){
-  Serial.println(message);
   unsigned long currentMillis = millis();
   
+  if(message.length() > 0)
+    Serial.println(message);
+      
   switch (alarm){
     case 1: // red alert
       digitalWrite(yellowLedPin, LOW);
@@ -254,6 +278,7 @@ void PlayInfoLed(unsigned long currentMillis) {
     infoLedState = HIGH; 
     lastInfoPeriodOnStart = currentMillis;
     digitalWrite(greenLedPin, infoLedState);
+    Serial.println("idle");
   }
 }
 
@@ -281,7 +306,6 @@ void PlayAlarm(unsigned long currentMillis) {
   }
 }
   
-
 bool isSDnetwork(String wiFiSSID){
   
   if(wiFiSSID.length() < ssid.length())
@@ -290,11 +314,6 @@ bool isSDnetwork(String wiFiSSID){
     return true;
 
   return false;
-}
-
-double calculateDistance(int wifiPower) {
-  double exp = (27.55 - (20 * log10(wifiChannel.frequency)) + wifiPower) / 20.0;
-  return pow(10.0, exp);
 }
 
 int calculatePercentage(int powerLevel) {
