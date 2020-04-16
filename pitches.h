@@ -2,10 +2,6 @@
  * Public Constants
  *************************************************/
 
-#ifndef APSSID
-#define APSSID "Sx"
-#endif
-
 #ifndef MAX_POWER_LEVEL
 #define MAX_POWER_LEVEL 20.5
 #endif
@@ -13,22 +9,22 @@
 typedef struct {
   int channelNumber;
   int frequency;
-} WLANchannel;
+} WLANChannel;
 
-const WLANchannel WiFiChannels[14] = {
-  {0, 0}, 
-  {1, 2412}, 
-  {2, 2417}, 
-  {3, 2422}, 
-  {4, 2427}, 
-  {5, 2432}, 
-  {6, 2437}, 
-  {7, 2442}, 
-  {8, 2447}, 
-  {9, 2452}, 
-  {10, 2457}, 
-  {11, 2462}, 
-  {12, 2467}, 
+const WLANChannel WiFiChannels[14] = {
+  {0, 0},
+  {1, 2412},
+  {2, 2417},
+  {3, 2422},
+  {4, 2427},
+  {5, 2432},
+  {6, 2437},
+  {7, 2442},
+  {8, 2447},
+  {9, 2452},
+  {10, 2457},
+  {11, 2462},
+  {12, 2467},
   {13, 2472}
 };
 
