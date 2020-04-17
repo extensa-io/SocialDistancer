@@ -1,14 +1,15 @@
 #include "ESP8266WiFi.h"
-#include "math.h"
 #include "pitches.h"
 
 // Outputs
-const int redLedPin = 16; // 4
-const int yellowLedPin = 13; // 16 PWM
-const int greenLedPin = 12; // 5 PWM
-const int vibrationPin = 5; // 15
-const int piezoPin = 15; // UART 2
-const int stayOnPin = 0; // 14
+const bool activePiezo = true;
+
+const int redLedPin = 4;
+const int yellowLedPin = 16;
+const int greenLedPin = 2; // inverted logic
+const int vibrationPin = 15;
+const int piezoPin = 5;
+const int stayOnPin = 14;
 
 // Battery meter
 #define BATTERYMETERPIN A0
@@ -20,7 +21,7 @@ unsigned long lastBatteryCheck = 0;
 int batteryCharge = 3;
 
 // Inputs
-const int buttonPin = 4; // 12
+const int buttonPin = 12; // 12
 int reading;
 int previous = HIGH;
 
@@ -49,6 +50,7 @@ bool outputVibration = false;
 unsigned long lastLedPeriodStart = 0;
 const int ledPeriodDuration=200;
 int ledState = LOW;
+bool alarmTriggered = false;
 
 bool toneAlarmActive = true;
 bool vibrationAlarmActive = true;
@@ -68,6 +70,7 @@ const int snoozePeriod = 300000; // 5mins
 unsigned long snoozePeriodStart = 0;
 
 void TriggerAlert(int alarm, String message = "");
+void clearFeedback(bool stopLights = true, bool stopTone = true, bool stopVibration = true);
 
 void setup() {
 
@@ -77,12 +80,12 @@ void setup() {
   pinMode(vibrationPin, OUTPUT);
   pinMode(piezoPin, OUTPUT);
 
-  //pinMode(stayOnPin, OUTPUT);
-  //digitalWrite(stayOnPin, HIGH);
+  pinMode(stayOnPin, OUTPUT);
+  digitalWrite(stayOnPin, HIGH);
 
-  pinMode(buttonPin, INPUT_PULLUP);
+  pinMode(buttonPin, INPUT);
 
-  Serial.begin(115200);
+  Serial.begin(9600);
   WiFi.enableAP(true);
   delay(100);
 
@@ -109,23 +112,21 @@ void loop() {
 
   reading = digitalRead(buttonPin);
 
-  if(reading == HIGH && previous == LOW){
-    previous = HIGH;
+  if (reading == LOW && previous == HIGH){
+    previous = LOW;
     CheckButton(millis());
   }
-  else if (reading == LOW && previous == HIGH)
+  else if (reading == HIGH && previous == LOW)
   {
-    previous = LOW;
+    previous = HIGH;
     buttonPressedStart = millis();
   }
 
-  if(snoozed) {
-    if(millis() - snoozePeriodStart < snoozePeriod) {
+  if (snoozed) {
+    if (millis() - snoozePeriodStart < snoozePeriod)
       return;
-    }
-    else {
+    else
       snoozed = false;
-    }
   }
 
   int n = WiFi.scanNetworks(false, true, wifiChannel.channelNumber); // sync, hidden
@@ -145,56 +146,39 @@ void loop() {
         if (powerPercentage < 40) {
           TriggerAlert(0, "OK " + message);
         }
-        else if (powerPercentage > 60) {
+        else if (powerPercentage > 50) {
           TriggerAlert(1, "HIGH ALERT ************ " + message);
         }
         else
         {
-          TriggerAlert(3, "MID alert ************ " + message);
+          TriggerAlert(3, "LOW alert ************ " + message);
         }
       }
     }
   }
 
   WiFi.scanDelete();
-}// loop
+} // loop
 
 void TriggerAlert(int alarm, String message){
-  unsigned long currentMillis = millis();
+    unsigned long currentMillis = millis();
 
-  if(message.length() > 0)
-    Serial.println(message);
+    if (message.length() > 0)
+        Serial.println(message);
 
-  switch (alarm){
-    case 1: // red alert
-      digitalWrite(yellowLedPin, LOW);
-      digitalWrite(greenLedPin, LOW);
-      PlayLed(redLedPin, currentMillis);
-      PlayAlarm(currentMillis);
-      break;
-    case 2:
-      digitalWrite(yellowLedPin, LOW);
-      digitalWrite(greenLedPin, LOW);
-      PlayLed(redLedPin, currentMillis);
-      break;
-    case 3:
-      digitalWrite(redLedPin, LOW);
-      digitalWrite(greenLedPin, LOW);
-      PlayLed(yellowLedPin, currentMillis);
-      break;
-    default:
-      digitalWrite(redLedPin, LOW);
-      digitalWrite(yellowLedPin, LOW);
-      PlayInfoLed(currentMillis);
-      break;
-  }
+    clearFeedback();
+
+    if(alarm == 0)
+        PlayInfoLed(currentMillis);
+     else
+        PlayAlarm(alarm, currentMillis);
 }
 
 void CheckButton(unsigned long currentMillis) {
   int elapsedTime = currentMillis - buttonPressedStart;
 
   int pushType = 0;
-  if(elapsedTime <= shortPush){
+  if (elapsedTime <= shortPush){
     pushType = 1;
     if (currentMillis - lastShortPush <= pushInterval) {
       shortPushCounter ++;
@@ -207,10 +191,11 @@ void CheckButton(unsigned long currentMillis) {
   } else if (elapsedTime >= longPush) {
     pushType = 3;
   } else if (elapsedTime >= mediumPush) {
-    pushType = 2;
+    pushType = 2; // not in use
   }
 
-  if(pushType == 1 && shortPushCounter == 3){
+  if (pushType == 1 && shortPushCounter == 3){
+    clearFeedback();
     TriggerAlert(0, "Let's Snooze");
 
     shortPushCounter = 0;
@@ -220,31 +205,26 @@ void CheckButton(unsigned long currentMillis) {
     return;
   }
 
-  if(pushType == 2 & shortPushCounter == 0) {
-    //Serial.println("medium push - battery indicator");
-    // call battery indicator here
-    return;
-  }
-
-  if(pushType == 3 && shortPushCounter == 1) {
+  if (pushType == 3 && shortPushCounter == 1) {
     Serial.println("Long push - DEACTIVATE the TONE ALARM");
     shortPushCounter = 0;
-    noTone(piezoPin);
+    PlayPiezo(false);
     toneAlarmActive = false;
     return;
   }
 
-  if(pushType == 3 && shortPushCounter == 2) {
+  if (pushType == 3 && shortPushCounter == 2) {
     Serial.println("Long push - DEACTIVATE both TONE ALARM and VIBRATION");
     shortPushCounter = 0;
-    noTone(piezoPin);
+
+    PlayPiezo(false);
     digitalWrite(vibrationPin, LOW);
     toneAlarmActive = false;
     vibrationAlarmActive = false;
     return;
   }
 
-  if(pushType == 4 && shortPushCounter == 0) {
+  if (pushType == 4 && shortPushCounter == 0) {
     Serial.println("Turn off");
     // call shut down here
     return;
@@ -252,13 +232,12 @@ void CheckButton(unsigned long currentMillis) {
 }
 
 void CheckBattery(unsigned long currentMillis) {
-
   if (currentMillis - lastBatteryCheck >= batteryCheckInterval) {
     lastBatteryCheck = currentMillis;
     batteryReadings[batterySamples] = analogRead(BATTERYMETERPIN);
     batterySamples++;
 
-    if(batterySamples == batterySamplingSize)
+    if (batterySamples == batterySamplingSize)
     {
         float average;
         for (int i=0; i<batterySamplingSize; i++)
@@ -278,13 +257,14 @@ void CheckBattery(unsigned long currentMillis) {
          batteryCharge = 3;
         }
         batterySamples = 0;
-        Serial.println("Battery read at " + String(average));
+        Serial.printf("Battery read at %lf\n", average);
     }
   }
 }
 
 void PlayLed(int led, unsigned long currentMillis) {
   if (currentMillis - lastLedPeriodStart >= ledPeriodDuration) {
+    clearFeedback();
     lastLedPeriodStart = currentMillis;
     if (ledState == LOW) {
       ledState = HIGH;
@@ -295,8 +275,23 @@ void PlayLed(int led, unsigned long currentMillis) {
   }
 }
 
+void PlayPiezo(bool makeSound){
+    if (activePiezo){
+        if (makeSound)
+            digitalWrite(vibrationPin, HIGH);
+        else
+            digitalWrite(vibrationPin, LOW);
+    } else {
+        if (makeSound)
+            tone(piezoPin, alarmFrequency, onDuration); // play 550 Hz tone in background for 'onDuration'
+        else
+            noTone(piezoPin);
+    }
+}
+
 void PlayInfoLed(unsigned long currentMillis) {
-  if(infoLedState == HIGH && currentMillis - lastInfoPeriodOnStart >= infoStandbyOn)
+
+  if (infoLedState == HIGH && currentMillis - lastInfoPeriodOnStart >= infoStandbyOn)
   {
     infoLedState = LOW;
     lastInfoPeriodOffStart = currentMillis;
@@ -304,6 +299,8 @@ void PlayInfoLed(unsigned long currentMillis) {
   }
   else if (infoLedState == LOW && currentMillis - lastInfoPeriodOffStart >=  infoStandbyOff[batteryCharge])
   {
+    lastInfoPeriodOnStart = currentMillis;
+
     switch( batteryCharge ){
       case 3:
         infoCurrentLed = greenLedPin;
@@ -318,68 +315,87 @@ void PlayInfoLed(unsigned long currentMillis) {
         infoCurrentLed = greenLedPin;
         break;
     }
+
     Serial.printf("idle - Battery charge: %d\n", batteryCharge);
+
     infoLedState = HIGH;
-    lastInfoPeriodOnStart = currentMillis;
-    digitalWrite(infoCurrentLed, infoLedState);
+
+    if (infoCurrentLed = greenLedPin)
+        digitalWrite(infoCurrentLed, LOW); // inverted logic GPIO02
+    else
+        digitalWrite(infoCurrentLed, HIGH);
   }
 }
 
-void clearFeedback() {
+void clearFeedback(bool stopLights, bool stopTone, bool stopVibration) {
     digitalWrite(redLedPin, LOW);
     digitalWrite(yellowLedPin, LOW);
-    digitalWrite(greenLedPin, LOW);
-    noTone(piezoPin);
-    digitalWrite(vibrationPin, LOW);
-}
-
-void PlayAlarm(unsigned long currentMillis) {
-
-  if(toneAlarmActive || vibrationAlarmActive) {
-    if (outputTone) {
-      if (currentMillis-lastSoundPeriodStart >= periodDuration) // tone is on, only turn off if it's been long enough
-      {
-        lastSoundPeriodStart=currentMillis;
-        noTone(piezoPin);
+    digitalWrite(greenLedPin, HIGH); // inverted logic GPIO02
+    if (stopTone)
+        PlayPiezo(false);
+    if (stopVibration)
         digitalWrite(vibrationPin, LOW);
-        outputTone = false;
-      }
-    } else {
-      if (currentMillis-lastSoundPeriodStart >= periodDuration) { // No tone, turn on if it's time
-        lastSoundPeriodStart+=periodDuration;
-        if(toneAlarmActive)
-          tone(piezoPin, alarmFrequency, onDuration); // play 550 Hz tone in background for 'onDuration'
-        if(vibrationAlarmActive)
-          digitalWrite(vibrationPin, HIGH);
-        outputTone = true;
-      }
-    }
-  }
 }
 
-bool isSDnetwork(String wiFiSSID){
+void PlayAlarm(int alarm, unsigned long currentMillis) {
 
-  if(wiFiSSID.length() < ssid.length())
+    lastInfoPeriodOnStart = currentMillis; // resets info period to zero
+
+    switch (alarm){
+        case 1: // high alert
+            PlayLed(redLedPin, currentMillis);
+            break;
+        case 3: // low alert
+            PlayLed(yellowLedPin, currentMillis);
+            break;
+        default: // no alert
+            PlayLed(yellowLedPin, currentMillis);
+            break;
+    }
+
+    if (toneAlarmActive || vibrationAlarmActive) {
+        if (outputTone) {
+            if (currentMillis-lastSoundPeriodStart >= periodDuration) // tone is on, only turn off if it's been long enough
+            {
+                lastSoundPeriodStart=currentMillis;
+                PlayPiezo(false);
+                digitalWrite(vibrationPin, LOW);
+                outputTone = false;
+            }
+        } else {
+            if (currentMillis-lastSoundPeriodStart >= periodDuration) { // No tone, turn on if it's time
+                lastSoundPeriodStart+=periodDuration;
+                outputTone = true;
+                if (toneAlarmActive)
+                    PlayPiezo(true);
+                if (vibrationAlarmActive)
+                    digitalWrite(vibrationPin, HIGH);
+            }
+        }
+    }
+}
+
+bool isSDNetwork(String wiFiSSID){
+
+  if (wiFiSSID.length() < ssid.length())
     return false;
-  if(wiFiSSID.substring(0, ssid.length()) == ssid)
+  if (wiFiSSID.substring(0, ssid.length()) == ssid)
     return true;
 
   return false;
 }
 
 int calculatePercentage(int powerLevel) {
-    if (powerLevel < 1 ) {
+    if (powerLevel < 1 )
       powerLevel = 1;
-    }
-    else if (powerLevel > 99) {
+    else if (powerLevel > 99)
       powerLevel = 99;
-    }
-  return dBmPercentage[powerLevel];
+    return dBmPercentage[powerLevel];
 }
 
 String macToString(const unsigned char* mac) {
-  char buf[20];
-  snprintf(buf, sizeof(buf), "-%02x%02x%02x%02x%02x%02x",
+    char buf[20];
+    snprintf(buf, sizeof(buf), "-%02x%02x%02x%02x%02x%02x",
            mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-  return String(buf);
+    return String(buf);
 }
