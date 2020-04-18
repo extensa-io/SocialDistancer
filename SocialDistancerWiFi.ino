@@ -2,29 +2,30 @@
 #include "pitches.h"
 
 // Outputs
-const bool activePiezo = true;
+const bool activePiezo = false; // analog output
 
-const int redLedPin = 4;
-const int yellowLedPin = 16;
 const int greenLedPin = 2; // inverted logic
+const int yellowLedPin = 16;
+const int redLedPin = 4;
 const int vibrationPin = 15;
 const int piezoPin = 5;
 const int stayOnPin = 14;
 
 // Battery meter
-#define BATTERYMETERPIN A0
+const int batteryLevelPin = A0;
 const int batterySamplingSize = 10;
 int batteryReadings[batterySamplingSize]; // sampling size
 int batterySamples = 0;
-const int batteryCheckInterval = 450; // ms - 300000 - 5mins
+const int batteryCheckInterval = 300000; // ms - 5mins
 unsigned long lastBatteryCheck = 0;
 int batteryCharge = 3;
 
 // Inputs
 const int buttonPin = 12; // 12
 int reading;
-int previous = HIGH;
+int previous = LOW;
 
+// Button variables
 const int shortPush = 200; //ms
 const int mediumPush = 1000; //ms
 const int longPush = 2000; //ms
@@ -66,7 +67,7 @@ char msg[64];
 
 // Snooze variables
 bool snoozed = false;
-const int snoozePeriod = 300000; // 5mins
+const int snoozePeriod = 3000; // 5mins - 300000
 unsigned long snoozePeriodStart = 0;
 
 void TriggerAlert(int alarm, String message = "");
@@ -74,86 +75,85 @@ void clearFeedback(bool stopLights = true, bool stopTone = true, bool stopVibrat
 
 void setup() {
 
-  pinMode(redLedPin, OUTPUT);
-  pinMode(yellowLedPin, OUTPUT);
-  pinMode(greenLedPin, OUTPUT);
-  pinMode(vibrationPin, OUTPUT);
-  pinMode(piezoPin, OUTPUT);
+    pinMode(redLedPin, OUTPUT);
+    pinMode(yellowLedPin, OUTPUT);
+    pinMode(greenLedPin, OUTPUT);
+    pinMode(vibrationPin, OUTPUT);
+    pinMode(piezoPin, OUTPUT);
 
-  pinMode(stayOnPin, OUTPUT);
-  digitalWrite(stayOnPin, HIGH);
+    pinMode(stayOnPin, OUTPUT);
+    digitalWrite(stayOnPin, HIGH);
 
-  pinMode(buttonPin, INPUT);
+    pinMode(buttonPin, INPUT_PULLUP);
 
-  Serial.begin(9600);
-  WiFi.enableAP(true);
-  delay(100);
+    Serial.begin(115200);
+    WiFi.enableAP(true);
+    delay(100);
 
-  WiFi.mode(WIFI_STA);
+    WiFi.mode(WIFI_STA);
 
-  ActivateAccessPoint();
+    ActivateAccessPoint();
 
-  TriggerAlert(0, "SOCIAL DISTANCER");
+    TriggerAlert(0, "SOCIAL DISTANCER");
 }
 
 void ActivateAccessPoint() {
-  WiFi.macAddress(mac);
+    WiFi.macAddress(mac);
 
-  WiFi.setOutputPower(powerLevel);
-  String netName = ssid + macToString(mac);
+    WiFi.setOutputPower(powerLevel);
+    String netName = ssid + macToString(mac);
 
-  Serial.println(WiFi.softAP(netName, "", wifiChannel.channelNumber, true) ? netName + " AP Ready" : "AP Failed!"); // hidden
-  delay(500);
-  Serial.println("AP setup done");
-  Serial.println("");
+    Serial.println(WiFi.softAP(netName, "", wifiChannel.channelNumber, true) ? netName + " AP Ready" : "AP Failed!"); // hidden
+    delay(500);
+    Serial.println("AP setup done");
+    Serial.println("");
 }
 
 void loop() {
 
-  reading = digitalRead(buttonPin);
+    reading = digitalRead(buttonPin);
 
-  if (reading == LOW && previous == HIGH){
-    previous = LOW;
-    CheckButton(millis());
-  }
-  else if (reading == HIGH && previous == LOW)
-  {
-    previous = HIGH;
-    buttonPressedStart = millis();
-  }
+    if (reading == HIGH && previous == LOW){
+        previous = HIGH;
+        CheckButton(millis());
+    }
+    else if (reading == LOW && previous == HIGH)
+    {
+        previous = LOW;
+        buttonPressedStart = millis();
+    }
 
-  if (snoozed) {
-    if (millis() - snoozePeriodStart < snoozePeriod)
-      return;
-    else
-      snoozed = false;
-  }
+    if (snoozed)
+        if (millis() - snoozePeriodStart < snoozePeriod)
+          return;
+        else
+          snoozed = false;
 
-  int n = WiFi.scanNetworks(false, true, wifiChannel.channelNumber); // sync, hidden
+    int n = WiFi.scanNetworks(false, true, wifiChannel.channelNumber); // sync, hidden
 
-  if (n == 0) {
-    TriggerAlert(0);
-  } else {
+    if (n == 0) {
+        TriggerAlert(0);
+    } else {
 
     for (int i = 0; i < n; ++i) {
 
-      if (WiFi.isHidden(i))
-      {
-        int powerPercentage = calculatePercentage(abs(WiFi.RSSI(i)));
+        if (WiFi.isHidden(i))
+            {
+            int powerPercentage = calculatePercentage(abs(WiFi.RSSI(i)));
 
-        String message = WiFi.SSID(i) + " - POWER: " + powerPercentage; // + " " + WiFi.RSSI(i) + "dBm - Distance: " + String(distance);
+            String message = WiFi.SSID(i) + " - POWER: " + powerPercentage; // + " " + WiFi.RSSI(i) + "dBm - Distance: " + String(distance);
 
-        if (powerPercentage < 40) {
-          TriggerAlert(0, "OK " + message);
+            if (powerPercentage < 40) {
+                TriggerAlert(0, "OK " + message);
+            }
+            else if (powerPercentage > 65) {
+                TriggerAlert(1, "HIGH ALERT ************ " + message);
+            }
+            else
+            {
+              TriggerAlert(3, "LOW alert ************ " + message);
+            }
         }
-        else if (powerPercentage > 50) {
-          TriggerAlert(1, "HIGH ALERT ************ " + message);
-        }
-        else
-        {
-          TriggerAlert(3, "LOW alert ************ " + message);
-        }
-      }
     }
   }
 
@@ -175,35 +175,37 @@ void TriggerAlert(int alarm, String message){
 }
 
 void CheckButton(unsigned long currentMillis) {
-  int elapsedTime = currentMillis - buttonPressedStart;
+    int elapsedTime = currentMillis - buttonPressedStart;
+    int pushType = 0;
 
-  int pushType = 0;
-  if (elapsedTime <= shortPush){
-    pushType = 1;
-    if (currentMillis - lastShortPush <= pushInterval) {
-      shortPushCounter ++;
+    if (elapsedTime <= shortPush){
+        pushType = 1;
+        if (currentMillis - lastShortPush <= pushInterval) {
+          shortPushCounter ++;
+        } else {
+            shortPushCounter = 1;
+        }
+        lastShortPush = currentMillis;
+    } else if (elapsedTime >= turnOffPush) {
+        pushType = 4;
+    } else if (elapsedTime >= longPush) {
+        pushType = 3;
+    } else if (elapsedTime >= mediumPush) {
+        pushType = 2; // not in use
     }
-    else
-      shortPushCounter = 1;
-    lastShortPush = currentMillis;
-  } else if (elapsedTime >= turnOffPush) {
-    pushType = 4;
-  } else if (elapsedTime >= longPush) {
-    pushType = 3;
-  } else if (elapsedTime >= mediumPush) {
-    pushType = 2; // not in use
-  }
 
-  if (pushType == 1 && shortPushCounter == 3){
-    clearFeedback();
-    TriggerAlert(0, "Let's Snooze");
+    Serial.println(shortPushCounter);
 
-    shortPushCounter = 0;
-    snoozePeriodStart = currentMillis;
-    snoozed = true;
+    if (pushType == 1 && shortPushCounter == 3){
+        clearFeedback();
+        TriggerAlert(0, "Let's Snooze");
 
-    return;
-  }
+        shortPushCounter = 0;
+        snoozePeriodStart = currentMillis;
+        snoozed = true;
+
+        return;
+    }
 
   if (pushType == 3 && shortPushCounter == 1) {
     Serial.println("Long push - DEACTIVATE the TONE ALARM");
@@ -234,7 +236,7 @@ void CheckButton(unsigned long currentMillis) {
 void CheckBattery(unsigned long currentMillis) {
   if (currentMillis - lastBatteryCheck >= batteryCheckInterval) {
     lastBatteryCheck = currentMillis;
-    batteryReadings[batterySamples] = analogRead(BATTERYMETERPIN);
+    batteryReadings[batterySamples] = analogRead(batteryLevelPin);
     batterySamples++;
 
     if (batterySamples == batterySamplingSize)
@@ -276,17 +278,16 @@ void PlayLed(int led, unsigned long currentMillis) {
 }
 
 void PlayPiezo(bool makeSound){
-    if (activePiezo){
-        if (makeSound)
-            digitalWrite(vibrationPin, HIGH);
-        else
-            digitalWrite(vibrationPin, LOW);
-    } else {
+    if (activePiezo)
         if (makeSound)
             tone(piezoPin, alarmFrequency, onDuration); // play 550 Hz tone in background for 'onDuration'
         else
             noTone(piezoPin);
-    }
+    else
+        if (makeSound)
+            analogWrite(piezoPin, 1000);
+        else
+            analogWrite(piezoPin, 0);
 }
 
 void PlayInfoLed(unsigned long currentMillis) {
@@ -295,7 +296,7 @@ void PlayInfoLed(unsigned long currentMillis) {
   {
     infoLedState = LOW;
     lastInfoPeriodOffStart = currentMillis;
-    clearFeedback();
+    clearFeedback(true, false, false);
   }
   else if (infoLedState == LOW && currentMillis - lastInfoPeriodOffStart >=  infoStandbyOff[batteryCharge])
   {
@@ -343,12 +344,15 @@ void PlayAlarm(int alarm, unsigned long currentMillis) {
 
     switch (alarm){
         case 1: // high alert
+            toneAlarmActive = true;
             PlayLed(redLedPin, currentMillis);
             break;
         case 3: // low alert
+            toneAlarmActive = false;
             PlayLed(yellowLedPin, currentMillis);
             break;
         default: // no alert
+            toneAlarmActive = false;
             PlayLed(yellowLedPin, currentMillis);
             break;
     }
