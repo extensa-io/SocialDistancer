@@ -1,5 +1,12 @@
 #include "ESP8266WiFi.h"
+#include "FastRunningMedian.h"
 #include "pitches.h"
+
+char message[100];
+
+// Read
+const byte readsSize = 24;
+FastRunningMedian<unsigned int,readsSize, 0> readsMedian;
 
 // Outputs
 const bool activePiezo = false; // analog output
@@ -25,7 +32,33 @@ const int buttonPin = 12; // 12
 int reading;
 int previous = LOW;
 
-// Button variables
+// Alarms and info notification
+byte alarmState = 0;
+byte currentAlarm = 0;
+int lowAlarmLevel = 0;
+int highAlarmLevel = 70; // <---------- ALARM LEVEL
+bool outputTone = false;
+bool outputVibration = false;
+unsigned long lastNetworkFound = 0;
+int ledState = LOW;
+bool toneAlarmActive = true;
+bool vibrationAlarmActive = true;
+byte batteryLevel = 3; // 1-3
+
+int lastPeriodOnStart = 0;
+int lastPeriodOffStart = 0;
+
+// Alarm period
+int alarmCheckInterval = 2000; // ms
+unsigned long alarmCheckStarts = 0;
+const int alarmOnDuration=250;
+const int alarmStandByDuration=250;
+
+// Info period
+const int infoOnDuration=500;
+const int infoStandbyDuration[4] = { 0, 2000, 3500, 6000 }; //ms, based on battery level
+
+// Button
 const int shortPush = 200; //ms
 const int mediumPush = 1000; //ms
 const int longPush = 2000; //ms
@@ -35,43 +68,25 @@ unsigned long lastShortPush = 0;
 unsigned long buttonPressedStart = 0;
 int shortPushCounter = 0;
 
+// Physical feedback
+const int alarmFrequency = 550; //Hz
+
 //AP variables
 const WLANChannel wifiChannel = WiFiChannels[11];
-const int powerLevel = 1.5;
+const byte powerLevel = 0;
 String ssid = "Sx";
 byte mac[6];
+String netName;
 
-//Alarm variables
-unsigned long lastSoundPeriodStart = 0;
-const int onDuration=750;
-const int periodDuration=1500;
-const int alarmFrequency = 550; //Hz
-bool outputTone = false;
-bool outputVibration = false;
-unsigned long lastLedPeriodStart = 0;
-const int ledPeriodDuration=200;
-int ledState = LOW;
-bool alarmTriggered = false;
-
-bool toneAlarmActive = true;
-bool vibrationAlarmActive = true;
-
-//Info variables
-unsigned long lastInfoPeriodOnStart = 0;
-unsigned long lastInfoPeriodOffStart = 0;
-const int infoStandbyOn=300;
-const int infoStandbyOff[4] = { 0, 2000, 3500, 6000 }; //ms, based on battery level
-int infoLedState = LOW;
-int infoCurrentLed;
 char msg[64];
 
-// Snooze variables
+
+// Snooze
 bool snoozed = false;
 const int snoozePeriod = 3000; // 5mins - 300000
 unsigned long snoozePeriodStart = 0;
 
-void TriggerAlert(int alarm, String message = "");
-void clearFeedback(bool stopLights = true, bool stopTone = true, bool stopVibration = true);
+void ClearFeedback(bool stopLights = true, bool stopTone = true, bool stopVibration = true);
 
 void setup() {
 
@@ -87,91 +102,190 @@ void setup() {
     pinMode(buttonPin, INPUT_PULLUP);
 
     Serial.begin(115200);
-    WiFi.enableAP(true);
-    delay(100);
 
-    WiFi.mode(WIFI_STA);
+    WiFi.macAddress(mac);
+    netName = ssid + MacToString(mac);
 
     ActivateAccessPoint();
-
-    TriggerAlert(0, "SOCIAL DISTANCER");
 }
 
 void ActivateAccessPoint() {
-    WiFi.macAddress(mac);
 
+    ResetWifi();
+
+    WiFi.enableAP(true);
+    delay(200);
+    WiFi.mode(WIFI_STA);
     WiFi.setOutputPower(powerLevel);
-    String netName = ssid + macToString(mac);
 
     Serial.println(WiFi.softAP(netName, "", wifiChannel.channelNumber, true) ? netName + " AP Ready" : "AP Failed!"); // hidden
     delay(200);
     Serial.println("AP setup done");
-    Serial.println("");
+    Serial.println("SOCIAL DISTANCER READY");
 }
 
 void loop() {
+    char incomingMac[25];
+    char incomingSSID[25];
+    byte readPowerPercentage = 0;
+    bool networksFound = false;
+
+    int n = WiFi.scanNetworks(false, true, wifiChannel.channelNumber); // sync, hidden
+    unsigned long currentMillis = millis();
 
     reading = digitalRead(buttonPin);
 
-    if (reading == HIGH && previous == LOW){
+    if (reading == HIGH && previous == LOW) {
         previous = HIGH;
-        CheckButton(millis());
+        CheckButton(currentMillis);
     }
-    else if (reading == LOW && previous == HIGH)
-    {
+    else if (reading == LOW && previous == HIGH) {
         previous = LOW;
-        buttonPressedStart = millis();
+        buttonPressedStart = currentMillis;
     }
 
-    if (snoozed)
-        if (millis() - snoozePeriodStart < snoozePeriod)
-          return;
-        else
-          snoozed = false;
-
-    int n = WiFi.scanNetworks(false, true, wifiChannel.channelNumber); // sync, hidden
-
-    if (n == 0) {
-        TriggerAlert(0);
-    } else {
-
-    for (int i = 0; i < n; ++i) {
-
-        if (WiFi.isHidden(i))
-            {
-            int powerPercentage = calculatePercentage(abs(WiFi.RSSI(i)));
-
-            String message = WiFi.SSID(i) + " - POWER: " + powerPercentage; // + " " + WiFi.RSSI(i) + "dBm - Distance: " + String(distance);
-
-            if (powerPercentage < 40) {
-                TriggerAlert(0, "OK " + message);
-            }
-            else if (powerPercentage > 65) {
-                TriggerAlert(1, "HIGH ALERT ************ " + message);
-            }
-            else
-            {
-              TriggerAlert(3, "LOW alert ************ " + message);
-            }
+    if (snoozed) {
+        if (currentMillis - snoozePeriodStart < snoozePeriod) {
+            return;
+        } else {
+            snoozed = false;
         }
     }
-  }
 
-  WiFi.scanDelete();
-} // loop
+    PlayLed(currentMillis);
 
-void TriggerAlert(int alarm, String message){
+    int highestPower = 0;
+    for (int i = 0; i < n; i++) {
+        if (WiFi.isHidden(i))
+        {
+            readPowerPercentage = CalculatePercentage(WiFi.RSSI(i));
+            highestPower = readPowerPercentage > highestPower ? readPowerPercentage : highestPower;
+            lastNetworkFound = currentMillis;
+
+            networksFound = true;
+            //WiFi.BSSIDstr(i).toCharArray(incomingMac, 25);
+            //WiFi.SSID(i).toCharArray(incomingSSID, 25);
+            //Serial.printf("[%s] [%s]\n ", incomingSSID, incomingMac);
+        }
+    }
+    if (highestPower > 0) {
+        readsMedian.addValue(highestPower);
+    }
+
+    if(currentMillis - lastNetworkFound >= alarmCheckInterval) {
+        ClearReads();
+    }
+
+    if (currentMillis - alarmCheckStarts >= alarmCheckInterval) {
+        TriggerAlarm();
+    }
+
+    WiFi.scanDelete();
+}
+
+void TriggerAlarm() {
+
+    byte currentPower = readsMedian.getMedian();
+    Serial.printf("[%d]\n", currentPower);
+
+    ClearReads();
+
+    if (currentPower >= highAlarmLevel) {
+        alarmState = 1;
+    } else {
+        alarmState = 0;
+    }
     unsigned long currentMillis = millis();
 
-    if (message.length() > 0)
-        Serial.println(message);
+    if (alarmState != currentAlarm) {
+        currentAlarm = alarmState;
+        switch(alarmState) {
+            case 1:
+                Serial.printf("HIGH ALARM [%d]\n", currentPower);
+                break;
+            case 2:
+                Serial.printf("LOW [%d]\n", currentPower);
+                break;
+            default:
+                Serial.printf("no alarm\n");
+                break;
+        }
+    }
 
-    clearFeedback();
+    alarmCheckStarts = currentMillis;
+}
 
-    if(alarm == 0)
-        PlayInfoLed(currentMillis);
-     else
-        PlayAlarm(alarm, currentMillis);
+void PlayLed(unsigned long currentMillis) {
+
+    int onPeriod = 0;
+    int standByPeriod = 0;
+    int currentLed;
+    bool givePhysicalFeedback = false;
+
+    switch(alarmState) {
+        case 1:
+            currentLed = redLedPin;
+            onPeriod = alarmOnDuration;
+            standByPeriod = alarmStandByDuration;
+            givePhysicalFeedback = true;
+            break;
+        case 2:
+            break;
+        default:
+            onPeriod = infoOnDuration;
+            standByPeriod = infoStandbyDuration[batteryLevel];
+            switch (batteryLevel) {
+                case 3:
+                    currentLed = greenLedPin;
+                    break;
+                default:
+                    currentLed = yellowLedPin;
+                    break;
+            }
+            break;
+    }
+
+    if(ledState == HIGH && currentMillis - lastPeriodOnStart >= onPeriod) {
+
+        ledState = LOW;
+        ClearFeedback(); // stop all feedback;
+        lastPeriodOffStart = currentMillis;
+
+    } else if (ledState == LOW && currentMillis - lastPeriodOffStart >=  standByPeriod) {
+
+        ledState = HIGH;
+        lastPeriodOnStart = currentMillis;
+        if (currentLed == greenLedPin) {
+            digitalWrite(currentLed, LOW); // inverted logic GPIO02
+        } else {
+            digitalWrite(currentLed, HIGH);
+        }
+        if(givePhysicalFeedback) {
+            PlayPhysicalFeedback(true);
+        }
+    }
+}
+
+void PlayPhysicalFeedback(bool turnOn) {
+    if (activePiezo) {
+        if (turnOn && toneAlarmActive) {
+            tone(piezoPin, alarmFrequency, alarmOnDuration); // play 550 Hz tone in background for 'onDuration'
+        } else {
+            noTone(piezoPin);
+        }
+    } else {
+        if (turnOn & toneAlarmActive) {
+            analogWrite(piezoPin, 1000);
+        } else {
+            analogWrite(piezoPin, 0);
+        }
+    }
+
+    if (turnOn && vibrationAlarmActive) {
+        digitalWrite(vibrationPin, HIGH);
+    } else {
+        digitalWrite(vibrationPin, LOW);
+    }
 }
 
 void CheckButton(unsigned long currentMillis) {
@@ -194,11 +308,9 @@ void CheckButton(unsigned long currentMillis) {
         pushType = 2; // not in use
     }
 
-    Serial.println(shortPushCounter);
-
     if (pushType == 1 && shortPushCounter == 3){
-        clearFeedback();
-        TriggerAlert(0, "Let's Snooze");
+        ClearFeedback();
+        Serial.printf("Let's Snooze\n");
 
         shortPushCounter = 0;
         snoozePeriodStart = currentMillis;
@@ -210,7 +322,7 @@ void CheckButton(unsigned long currentMillis) {
   if (pushType == 3 && shortPushCounter == 1) {
     Serial.println("Long push - DEACTIVATE the TONE ALARM");
     shortPushCounter = 0;
-    PlayPiezo(false);
+
     toneAlarmActive = false;
     return;
   }
@@ -219,8 +331,6 @@ void CheckButton(unsigned long currentMillis) {
     Serial.println("Long push - DEACTIVATE both TONE ALARM and VIBRATION");
     shortPushCounter = 0;
 
-    PlayPiezo(false);
-    digitalWrite(vibrationPin, LOW);
     toneAlarmActive = false;
     vibrationAlarmActive = false;
     return;
@@ -264,142 +374,42 @@ void CheckBattery(unsigned long currentMillis) {
   }
 }
 
-void PlayLed(int led, unsigned long currentMillis) {
-  if (currentMillis - lastLedPeriodStart >= ledPeriodDuration) {
-    clearFeedback();
-    lastLedPeriodStart = currentMillis;
-    if (ledState == LOW) {
-      ledState = HIGH;
-    } else {
-      ledState = LOW;
-    }
-    digitalWrite(led, ledState);
-  }
-}
-
-void PlayPiezo(bool makeSound){
-    if (activePiezo)
-        if (makeSound)
-            tone(piezoPin, alarmFrequency, onDuration); // play 550 Hz tone in background for 'onDuration'
-        else
-            noTone(piezoPin);
-    else
-        if (makeSound)
-            analogWrite(piezoPin, 1000);
-        else
-            analogWrite(piezoPin, 0);
-}
-
-void PlayInfoLed(unsigned long currentMillis) {
-
-  if (infoLedState == HIGH && currentMillis - lastInfoPeriodOnStart >= infoStandbyOn)
-  {
-    infoLedState = LOW;
-    lastInfoPeriodOffStart = currentMillis;
-    clearFeedback(true, false, false);
-  }
-  else if (infoLedState == LOW && currentMillis - lastInfoPeriodOffStart >=  infoStandbyOff[batteryCharge])
-  {
-    lastInfoPeriodOnStart = currentMillis;
-
-    switch( batteryCharge ){
-      case 3:
-        infoCurrentLed = greenLedPin;
-        break;
-      case 2:
-        infoCurrentLed = yellowLedPin;
-        break;
-      case 1:
-        infoCurrentLed = redLedPin;
-        break;
-      default:
-        infoCurrentLed = greenLedPin;
-        break;
-    }
-
-    Serial.printf("idle - Battery charge: %d\n", batteryCharge);
-
-    infoLedState = HIGH;
-
-    if (infoCurrentLed = greenLedPin)
-        digitalWrite(infoCurrentLed, LOW); // inverted logic GPIO02
-    else
-        digitalWrite(infoCurrentLed, HIGH);
-  }
-}
-
-void clearFeedback(bool stopLights, bool stopTone, bool stopVibration) {
+void ClearFeedback(bool stopLights, bool stopTone, bool stopVibration) {
     digitalWrite(redLedPin, LOW);
     digitalWrite(yellowLedPin, LOW);
     digitalWrite(greenLedPin, HIGH); // inverted logic GPIO02
-    if (stopTone)
-        PlayPiezo(false);
-    if (stopVibration)
-        digitalWrite(vibrationPin, LOW);
+    PlayPhysicalFeedback(false);
 }
 
-void PlayAlarm(int alarm, unsigned long currentMillis) {
-
-    lastInfoPeriodOnStart = currentMillis; // resets info period to zero
-
-    switch (alarm){
-        case 1: // high alert
-            toneAlarmActive = true;
-            PlayLed(redLedPin, currentMillis);
-            break;
-        case 3: // low alert
-            toneAlarmActive = false;
-            PlayLed(yellowLedPin, currentMillis);
-            break;
-        default: // no alert
-            toneAlarmActive = false;
-            PlayLed(yellowLedPin, currentMillis);
-            break;
-    }
-
-    if (toneAlarmActive || vibrationAlarmActive) {
-        if (outputTone) {
-            if (currentMillis-lastSoundPeriodStart >= periodDuration) // tone is on, only turn off if it's been long enough
-            {
-                lastSoundPeriodStart=currentMillis;
-                PlayPiezo(false);
-                digitalWrite(vibrationPin, LOW);
-                outputTone = false;
-            }
-        } else {
-            if (currentMillis-lastSoundPeriodStart >= periodDuration) { // No tone, turn on if it's time
-                lastSoundPeriodStart+=periodDuration;
-                outputTone = true;
-                if (toneAlarmActive)
-                    PlayPiezo(true);
-                if (vibrationAlarmActive)
-                    digitalWrite(vibrationPin, HIGH);
-            }
-        }
+void ClearReads() {
+    for (int i = 0; i<readsSize; i++) {
+        readsMedian.addValue(0);
     }
 }
 
-bool isSDNetwork(String wiFiSSID){
+void ResetWifi() {
 
-  if (wiFiSSID.length() < ssid.length())
-    return false;
-  if (wiFiSSID.substring(0, ssid.length()) == ssid)
-    return true;
+    WiFi.mode(WIFI_OFF);
+    delay( 1 );
 
-  return false;
+    WiFi.mode(WIFI_STA);
+    delay( 1 );
 }
 
-int calculatePercentage(int powerLevel) {
-    if (powerLevel < 1 )
-      powerLevel = 1;
-    else if (powerLevel > 99)
-      powerLevel = 99;
-    return dBmPercentage[powerLevel];
+int CalculatePercentage(int powerLevel) {
+    return dBmPercentage[abs(powerLevel)];
 }
 
-String macToString(const unsigned char* mac) {
+double CalculateDistance(int wifiPower) {
+  double exp = (27.55 - (20 * log10(wifiChannel.frequency)) + abs(wifiPower)) / 20.0;
+  return pow(10.0, exp);
+}
+
+
+String MacToString(const unsigned char* mac) {
     char buf[20];
     snprintf(buf, sizeof(buf), "-%02x%02x%02x%02x%02x%02x",
            mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
     return String(buf);
 }
+

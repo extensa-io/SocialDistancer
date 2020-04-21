@@ -6,6 +6,7 @@
       <w>piezo</w>
       <w>printf</w>
       <w>rssi</w>
+      <w>snprintf</w>
       <w>ssid</w>
     </words>
   </dictionary>
