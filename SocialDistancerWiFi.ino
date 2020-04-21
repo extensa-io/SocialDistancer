@@ -1,3 +1,6 @@
+// THE SOCIAL DISTANCER
+// Author: Néstor Daza - nestor@extensa.io
+
 #include "ESP8266WiFi.h"
 #include "FastRunningMedian.h"
 #include "pitches.h"
