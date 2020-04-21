@@ -37,7 +37,7 @@ int shortPushCounter = 0;
 
 //AP variables
 const WLANChannel wifiChannel = WiFiChannels[11];
-const int powerLevel = 10;
+const int powerLevel = 1.5;
 String ssid = "Sx";
 byte mac[6];
 
@@ -104,7 +104,7 @@ void ActivateAccessPoint() {
     String netName = ssid + macToString(mac);
 
     Serial.println(WiFi.softAP(netName, "", wifiChannel.channelNumber, true) ? netName + " AP Ready" : "AP Failed!"); // hidden
-    delay(500);
+    delay(200);
     Serial.println("AP setup done");
     Serial.println("");
 }
