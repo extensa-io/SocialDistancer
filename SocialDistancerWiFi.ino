@@ -1,5 +1,6 @@
 // THE SOCIAL DISTANCER
 // Author: Néstor Daza - nestor@extensa.io
+// http://gosocialdistancer.com/
 
 #include "ESP8266WiFi.h"
 #include "FastRunningMedian.h"
@@ -21,6 +22,9 @@ const int vibrationPin = 15;
 const int piezoPin = 5;
 const int stayOnPin = 14;
 
+const int analogWriteFrequency = 100;
+const int maxAnalogDutyCycle = 512;
+
 // Battery meter
 const int batteryLevelPin = A0;
 const int batterySamplingSize = 10;
@@ -35,11 +39,15 @@ const int buttonPin = 12; // 12
 int reading;
 int previous = LOW;
 
+// Debounce
+unsigned long lastDebounce = 0;
+unsigned long debounceDelay = 20;
+
 // Alarms and info notification
 byte alarmState = 0;
 byte currentAlarm = 0;
 int lowAlarmLevel = 0;
-int highAlarmLevel = 70; // <---------- ALARM LEVEL
+int highAlarmLevel = 68; // <---------- ALARM LEVEL
 bool outputTone = false;
 bool outputVibration = false;
 unsigned long lastNetworkFound = 0;
@@ -52,14 +60,14 @@ int lastPeriodOnStart = 0;
 int lastPeriodOffStart = 0;
 
 // Alarm period
-int alarmCheckInterval = 2000; // ms
+int alarmCheckInterval = 1500; // ms
 unsigned long alarmCheckStarts = 0;
 const int alarmOnDuration=250;
 const int alarmStandByDuration=250;
 
 // Info period
 const int infoOnDuration=500;
-const int infoStandbyDuration[4] = { 0, 2000, 3500, 6000 }; //ms, based on battery level
+const int infoStandbyDuration[4] = { 0, 1000, 3500, 6000 }; //ms, based on battery level
 
 // Button
 const int shortPush = 200; //ms
@@ -70,6 +78,7 @@ const int pushInterval = 450; // ms
 unsigned long lastShortPush = 0;
 unsigned long buttonPressedStart = 0;
 int shortPushCounter = 0;
+bool buttonPressed = false;
 
 // Physical feedback
 const int alarmFrequency = 550; //Hz
@@ -83,11 +92,12 @@ String netName;
 
 char msg[64];
 
-
 // Snooze
 bool snoozed = false;
-const int snoozePeriod = 3000; // 5mins - 300000
-unsigned long snoozePeriodStart = 0;
+const int snoozePeriod = 10000; // 5mins - 300000
+unsigned long snoozeStart = 0;
+
+////////////////////////////////////////////////////////////////////////////////////////////
 
 void ClearFeedback(bool stopLights = true, bool stopTone = true, bool stopVibration = true);
 
@@ -103,6 +113,8 @@ void setup() {
     digitalWrite(stayOnPin, HIGH);
 
     pinMode(buttonPin, INPUT_PULLUP);
+
+    analogWriteFreq(analogWriteFrequency); //should give 1Khz
 
     Serial.begin(115200);
 
@@ -127,33 +139,49 @@ void ActivateAccessPoint() {
     Serial.println("SOCIAL DISTANCER READY");
 }
 
+unsigned long startMeasureMillis = 0;
+unsigned long endMeasureMillis = 0;
+
 void loop() {
     char incomingMac[25];
     char incomingSSID[25];
     byte readPowerPercentage = 0;
     bool networksFound = false;
-
-    int n = WiFi.scanNetworks(false, true, wifiChannel.channelNumber); // sync, hidden
     unsigned long currentMillis = millis();
 
     reading = digitalRead(buttonPin);
-
-    if (reading == HIGH && previous == LOW) {
-        previous = HIGH;
-        CheckButton(currentMillis);
+    if (reading == HIGH) {
+        analogWrite(yellowLedPin, 0);
+    } else {
+        analogWrite(yellowLedPin, maxAnalogDutyCycle);
     }
-    else if (reading == LOW && previous == HIGH) {
-        previous = LOW;
-        buttonPressedStart = currentMillis;
+
+    if(reading != previous) {
+        lastDebounce = millis();
+    }
+
+    if ((currentMillis - lastDebounce) > debounceDelay) {
+        if (reading == HIGH && previous == LOW) {
+            previous = HIGH;
+            CheckButton(currentMillis);
+        }
+        else if (reading == LOW && previous == HIGH) {
+            previous = LOW;
+            ClearFeedback();
+            buttonPressed = true;
+            buttonPressedStart = currentMillis;
+        }
     }
 
     if (snoozed) {
-        if (currentMillis - snoozePeriodStart < snoozePeriod) {
+        if (currentMillis - snoozeStart < snoozePeriod) {
             return;
         } else {
             snoozed = false;
         }
     }
+
+    int n = WiFi.scanNetworks(false, true, wifiChannel.channelNumber); // sync, hidden
 
     PlayLed(currentMillis);
 
@@ -259,9 +287,9 @@ void PlayLed(unsigned long currentMillis) {
         ledState = HIGH;
         lastPeriodOnStart = currentMillis;
         if (currentLed == greenLedPin) {
-            digitalWrite(currentLed, LOW); // inverted logic GPIO02
+            analogWrite(currentLed, 0); // inverted logic GPIO02
         } else {
-            digitalWrite(currentLed, HIGH);
+            analogWrite(currentLed, maxAnalogDutyCycle);
         }
         if(givePhysicalFeedback) {
             PlayPhysicalFeedback(true);
@@ -316,7 +344,7 @@ void CheckButton(unsigned long currentMillis) {
         Serial.printf("Let's Snooze\n");
 
         shortPushCounter = 0;
-        snoozePeriodStart = currentMillis;
+        snoozeStart = currentMillis;
         snoozed = true;
 
         return;
@@ -341,6 +369,8 @@ void CheckButton(unsigned long currentMillis) {
 
   if (pushType == 4 && shortPushCounter == 0) {
     Serial.println("Turn off");
+
+    digitalWrite(stayOnPin, LOW);
     // call shut down here
     return;
   }
@@ -378,9 +408,9 @@ void CheckBattery(unsigned long currentMillis) {
 }
 
 void ClearFeedback(bool stopLights, bool stopTone, bool stopVibration) {
-    digitalWrite(redLedPin, LOW);
-    digitalWrite(yellowLedPin, LOW);
-    digitalWrite(greenLedPin, HIGH); // inverted logic GPIO02
+    analogWrite(redLedPin, 0);
+    analogWrite(yellowLedPin, 0);
+    analogWrite(greenLedPin, 1023); // inverted logic GPIO02
     PlayPhysicalFeedback(false);
 }
 
@@ -415,4 +445,3 @@ String MacToString(const unsigned char* mac) {
            mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
     return String(buf);
 }
-
