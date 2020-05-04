@@ -12,9 +12,7 @@ char message[100];
 const byte readsSize = 24;
 FastRunningMedian<unsigned int,readsSize, 0> readsMedian;
 
-// Outputs
-const bool activePiezo = false; // analog output
-
+// Output
 const int greenLedPin = 2; // inverted logic
 const int yellowLedPin = 16;
 const int redLedPin = 4;
@@ -22,38 +20,40 @@ const int vibrationPin = 15;
 const int piezoPin = 5;
 const int stayOnPin = 14;
 
-const int analogWriteFrequency = 100;
-const int maxAnalogDutyCycle = 512;
+const int analogWriteFrequency = 3500;
+const int onAnalogDutyCycle = 512;
 
 // Battery meter
 const int batteryLevelPin = A0;
 const int batterySamplingSize = 10;
-int batteryReadings[batterySamplingSize]; // sampling size
+int batteryReadings[batterySamplingSize]; 
 int batterySamples = 0;
 const int batteryCheckInterval = 300000; // ms - 5mins
 unsigned long lastBatteryCheck = 0;
 int batteryCharge = 3;
 
 // Inputs
-const int buttonPin = 12; // 12
+const int buttonPin = 12;
 int reading;
 int previous = LOW;
 
 // Debounce
 unsigned long lastDebounce = 0;
-unsigned long debounceDelay = 20;
+unsigned long debounceDelay = 50;
 
 // Alarms and info notification
+int highAlarmLevel = 66; // <---------- ALARM LEVEL ////////////////////////
 byte alarmState = 0;
 byte currentAlarm = 0;
 int lowAlarmLevel = 0;
-int highAlarmLevel = 68; // <---------- ALARM LEVEL
 bool outputTone = false;
 bool outputVibration = false;
 unsigned long lastNetworkFound = 0;
 int ledState = LOW;
-bool toneAlarmActive = true;
-bool vibrationAlarmActive = true;
+bool toneAlarmActive = false;
+bool vibrationAlarmActive = false;
+bool lightsActive = false;
+bool physicalFeedbackActive = false;
 byte batteryLevel = 3; // 1-3
 
 int lastPeriodOnStart = 0;
@@ -61,16 +61,17 @@ int lastPeriodOffStart = 0;
 
 // Alarm period
 int alarmCheckInterval = 1500; // ms
-unsigned long alarmCheckStarts = 0;
 const int alarmOnDuration=250;
 const int alarmStandByDuration=250;
+const int physicalStandByDuration=1000;
+unsigned long alarmCheckStarts = 0;
 
 // Info period
 const int infoOnDuration=500;
 const int infoStandbyDuration[4] = { 0, 1000, 3500, 6000 }; //ms, based on battery level
 
 // Button
-const int shortPush = 200; //ms
+const int shortPush = 150; //ms
 const int mediumPush = 1000; //ms
 const int longPush = 2000; //ms
 const int turnOffPush = 3000; //ms
@@ -85,7 +86,7 @@ const int alarmFrequency = 550; //Hz
 
 //AP variables
 const WLANChannel wifiChannel = WiFiChannels[11];
-const byte powerLevel = 0;
+const byte powerLevel = 0; // WiFi power is set at minimum
 String ssid = "Sx";
 byte mac[6];
 String netName;
@@ -122,6 +123,10 @@ void setup() {
     netName = ssid + MacToString(mac);
 
     ActivateAccessPoint();
+
+    toneAlarmActive = true;
+    vibrationAlarmActive = true;
+    lightsActive = true;
 }
 
 void ActivateAccessPoint() {
@@ -152,8 +157,12 @@ void loop() {
     reading = digitalRead(buttonPin);
     if (reading == HIGH) {
         analogWrite(yellowLedPin, 0);
+        lightsActive = true;
+        physicalFeedbackActive = true;
     } else {
-        analogWrite(yellowLedPin, maxAnalogDutyCycle);
+        analogWrite(yellowLedPin, onAnalogDutyCycle);
+        lightsActive = false;
+        physicalFeedbackActive = false;
     }
 
     if(reading != previous) {
@@ -251,14 +260,13 @@ void PlayLed(unsigned long currentMillis) {
     int onPeriod = 0;
     int standByPeriod = 0;
     int currentLed;
-    bool givePhysicalFeedback = false;
 
     switch(alarmState) {
         case 1:
             currentLed = redLedPin;
             onPeriod = alarmOnDuration;
             standByPeriod = alarmStandByDuration;
-            givePhysicalFeedback = true;
+            physicalFeedbackActive = true;
             break;
         case 2:
             break;
@@ -286,31 +294,29 @@ void PlayLed(unsigned long currentMillis) {
 
         ledState = HIGH;
         lastPeriodOnStart = currentMillis;
-        if (currentLed == greenLedPin) {
-            analogWrite(currentLed, 0); // inverted logic GPIO02
-        } else {
-            analogWrite(currentLed, maxAnalogDutyCycle);
+
+        if (lightsActive){
+            if (currentLed == greenLedPin) {
+                analogWrite(currentLed, 0); // inverted logic GPIO02
+            } else {
+                analogWrite(currentLed, onAnalogDutyCycle);
+            }
         }
-        if(givePhysicalFeedback) {
+
+        if(physicalFeedbackActive) {
             PlayPhysicalFeedback(true);
         }
     }
 }
 
 void PlayPhysicalFeedback(bool turnOn) {
-    if (activePiezo) {
-        if (turnOn && toneAlarmActive) {
-            tone(piezoPin, alarmFrequency, alarmOnDuration); // play 550 Hz tone in background for 'onDuration'
-        } else {
-            noTone(piezoPin);
-        }
+
+    if (turnOn & toneAlarmActive) {
+        analogWrite(piezoPin, onAnalogDutyCycle);
     } else {
-        if (turnOn & toneAlarmActive) {
-            analogWrite(piezoPin, 1000);
-        } else {
-            analogWrite(piezoPin, 0);
-        }
+        analogWrite(piezoPin, 0);
     }
+
 
     if (turnOn && vibrationAlarmActive) {
         digitalWrite(vibrationPin, HIGH);
@@ -367,11 +373,8 @@ void CheckButton(unsigned long currentMillis) {
     return;
   }
 
-  if (pushType == 4 && shortPushCounter == 0) {
-    Serial.println("Turn off");
-
-    digitalWrite(stayOnPin, LOW);
-    // call shut down here
+  if (pushType == 4 && shortPushCounter == 0) { // shut down here
+    ByeBye();
     return;
   }
 }
@@ -420,6 +423,21 @@ void ClearReads() {
     }
 }
 
+void ByeBye() {
+    toneAlarmActive = false;
+    vibrationAlarmActive = false;
+    lightsActive = false;
+
+    for(byte i = 0; i<3; i++) {
+        digitalWrite(vibrationPin, HIGH);
+        delay(100);
+        digitalWrite(vibrationPin, LOW);  
+        delay(100); 
+    } 
+    Serial.println("Turn off");
+    digitalWrite(stayOnPin, LOW);
+}
+
 void ResetWifi() {
 
     WiFi.mode(WIFI_OFF);
@@ -429,8 +447,8 @@ void ResetWifi() {
     delay( 1 );
 }
 
-int CalculatePercentage(int powerLevel) {
-    return dBmPercentage[abs(powerLevel)];
+int CalculatePercentage(int powerMeasure) {
+    return dBmPercentage[abs(powerMeasure)];
 }
 
 double CalculateDistance(int wifiPower) {
