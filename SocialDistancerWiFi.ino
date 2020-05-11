@@ -13,8 +13,6 @@ const byte readsSize = 24;
 FastRunningMedian<unsigned int,readsSize, 0> readsMedian;
 
 // Outputs
-const bool activePiezo = false; // analog output
-
 const int greenLedPin = 2; // inverted logic
 const int yellowLedPin = 16;
 const int redLedPin = 4;
@@ -22,8 +20,8 @@ const int vibrationPin = 15;
 const int piezoPin = 5;
 const int stayOnPin = 14;
 
-const int analogWriteFrequency = 100;
-const int maxAnalogDutyCycle = 512;
+const int analogWriteFrequency = 3500;
+const int onAnalogDutyCycle  = 512;
 
 // Battery meter
 const int batteryLevelPin = A0;
@@ -36,18 +34,20 @@ int batteryCharge = 3;
 
 // Inputs
 const int buttonPin = 12; // 12
+const int usb5vPin = 13; // 13
+int usb5vState;
 int reading;
 int previous = LOW;
 
 // Debounce
 unsigned long lastDebounce = 0;
-unsigned long debounceDelay = 20;
+unsigned long debounceDelay = 50;
 
 // Alarms and info notification
+int highAlarmLevel = 50; // <------------------------ ALARM LEVEL
 byte alarmState = 0;
 byte currentAlarm = 0;
 int lowAlarmLevel = 0;
-int highAlarmLevel = 68; // <---------- ALARM LEVEL
 bool outputTone = false;
 bool outputVibration = false;
 unsigned long lastNetworkFound = 0;
@@ -55,6 +55,8 @@ int ledState = LOW;
 bool toneAlarmActive = true;
 bool vibrationAlarmActive = true;
 byte batteryLevel = 3; // 1-3
+
+bool feedbackEnabled  = false;
 
 int lastPeriodOnStart = 0;
 int lastPeriodOffStart = 0;
@@ -85,7 +87,7 @@ const int alarmFrequency = 550; //Hz
 
 //AP variables
 const WLANChannel wifiChannel = WiFiChannels[11];
-const byte powerLevel = 0;
+const byte powerLevel = 0; // <------------------------ POWER LEVEL
 String ssid = "Sx";
 byte mac[6];
 String netName;
@@ -98,8 +100,6 @@ const int snoozePeriod = 10000; // 5mins - 300000
 unsigned long snoozeStart = 0;
 
 ////////////////////////////////////////////////////////////////////////////////////////////
-
-void ClearFeedback(bool stopLights = true, bool stopTone = true, bool stopVibration = true);
 
 void setup() {
 
@@ -114,17 +114,21 @@ void setup() {
 
     pinMode(buttonPin, INPUT_PULLUP);
 
-    analogWriteFreq(analogWriteFrequency); //should give 1Khz
+    analogWriteFreq(analogWriteFrequency);
 
     Serial.begin(115200);
 
-    WiFi.macAddress(mac);
-    netName = ssid + MacToString(mac);
+    StartUp();
 
     ActivateAccessPoint();
+
+    feedbackEnabled  = true;
 }
 
 void ActivateAccessPoint() {
+
+    WiFi.macAddress(mac);
+    netName = ssid + MacToString(mac);
 
     ResetWifi();
 
@@ -139,9 +143,6 @@ void ActivateAccessPoint() {
     Serial.println("SOCIAL DISTANCER READY");
 }
 
-unsigned long startMeasureMillis = 0;
-unsigned long endMeasureMillis = 0;
-
 void loop() {
     char incomingMac[25];
     char incomingSSID[25];
@@ -149,28 +150,27 @@ void loop() {
     bool networksFound = false;
     unsigned long currentMillis = millis();
 
+    CheckUSB5v(currentMillis);
+
     reading = digitalRead(buttonPin);
     if (reading == HIGH) {
         analogWrite(yellowLedPin, 0);
+        feedbackEnabled = true;
     } else {
-        analogWrite(yellowLedPin, maxAnalogDutyCycle);
+        analogWrite(yellowLedPin, onAnalogDutyCycle );
+        feedbackEnabled = false;
     }
 
-    if(reading != previous) {
-        lastDebounce = millis();
+    if (reading == HIGH && previous == LOW) {
+        previous = HIGH;
+        buttonPressed = false;
+        CheckButton(currentMillis);
     }
-
-    if ((currentMillis - lastDebounce) > debounceDelay) {
-        if (reading == HIGH && previous == LOW) {
-            previous = HIGH;
-            CheckButton(currentMillis);
-        }
-        else if (reading == LOW && previous == HIGH) {
-            previous = LOW;
-            ClearFeedback();
-            buttonPressed = true;
-            buttonPressedStart = currentMillis;
-        }
+    else if (reading == LOW && previous == HIGH) {
+        previous = LOW;
+        buttonPressed = true;
+        ClearFeedback();
+        buttonPressedStart = currentMillis;
     }
 
     if (snoozed) {
@@ -286,30 +286,25 @@ void PlayLed(unsigned long currentMillis) {
 
         ledState = HIGH;
         lastPeriodOnStart = currentMillis;
-        if (currentLed == greenLedPin) {
-            analogWrite(currentLed, 0); // inverted logic GPIO02
-        } else {
-            analogWrite(currentLed, maxAnalogDutyCycle);
-        }
-        if(givePhysicalFeedback) {
-            PlayPhysicalFeedback(true);
+        if (feedbackEnabled) {
+            if (currentLed == greenLedPin) {
+                analogWrite(currentLed, 0); // inverted logic GPIO02
+            } else {
+                analogWrite(currentLed, onAnalogDutyCycle );
+            }
+            if(givePhysicalFeedback) {
+                PlayPhysicalFeedback(true);
+            }
         }
     }
 }
 
 void PlayPhysicalFeedback(bool turnOn) {
-    if (activePiezo) {
-        if (turnOn && toneAlarmActive) {
-            tone(piezoPin, alarmFrequency, alarmOnDuration); // play 550 Hz tone in background for 'onDuration'
-        } else {
-            noTone(piezoPin);
-        }
+
+    if (turnOn & toneAlarmActive) {
+        analogWrite(piezoPin, onAnalogDutyCycle);
     } else {
-        if (turnOn & toneAlarmActive) {
-            analogWrite(piezoPin, 1000);
-        } else {
-            analogWrite(piezoPin, 0);
-        }
+        analogWrite(piezoPin, 0);
     }
 
     if (turnOn && vibrationAlarmActive) {
@@ -340,13 +335,8 @@ void CheckButton(unsigned long currentMillis) {
     }
 
     if (pushType == 1 && shortPushCounter == 3){
-        ClearFeedback();
         Serial.printf("Let's Snooze\n");
-
-        shortPushCounter = 0;
-        snoozeStart = currentMillis;
-        snoozed = true;
-
+        Snooze(currentMillis);
         return;
     }
 
@@ -367,13 +357,64 @@ void CheckButton(unsigned long currentMillis) {
     return;
   }
 
-  if (pushType == 4 && shortPushCounter == 0) {
-    Serial.println("Turn off");
-
-    digitalWrite(stayOnPin, LOW);
+  if (pushType == 4 && shortPushCounter == 2) {
     // call shut down here
+    Serial.println("OTA");
     return;
   }
+
+  if (pushType == 4 && shortPushCounter == 0) {
+    // call shut down here
+    ByeBye(currentMillis);
+    return;
+  }
+}
+
+void Snooze(unsigned long currentMillis) {
+    ClearFeedback();
+
+    shortPushCounter = 0;
+    snoozeStart = currentMillis;
+    snoozed = true;
+}
+
+void CheckUSB5v(unsigned long currentMillis) {
+    usb5vState = digitalRead(usb5vPin);
+    if (usb5vState == LOW) {
+        delay(300);
+        usb5vState = digitalRead(usb5vPin);
+        if (usb5vState == LOW) {
+           ByeBye(currentMillis);
+           return;
+        }
+    }
+}
+void StartUp() {
+    analogWrite(greenLedPin, 768); // inverted logic GPIO02
+    delay(300);
+    digitalWrite(stayOnPin, HIGH);
+    digitalWrite(vibrationPin, HIGH);
+    delay(500);
+    digitalWrite(vibrationPin, LOW);
+    analogWrite(greenLedPin, 1023); //
+}
+
+void ByeBye(unsigned long currentMillis) {
+    Snooze(currentMillis);
+    feedbackEnabled = false;
+
+    for(byte i = 0; i<3; i++) {
+     digitalWrite(vibrationPin, HIGH);
+     analogWrite(redLedPin, 0);
+     delay(100);
+     digitalWrite(vibrationPin, LOW);
+     analogWrite(redLedPin, 127);
+     delay(100);
+    }
+    analogWrite(redLedPin, 0);
+    Serial.println("Turn off");
+    digitalWrite(stayOnPin, LOW);
+    delay(5000);
 }
 
 void CheckBattery(unsigned long currentMillis) {
@@ -407,7 +448,7 @@ void CheckBattery(unsigned long currentMillis) {
   }
 }
 
-void ClearFeedback(bool stopLights, bool stopTone, bool stopVibration) {
+void ClearFeedback() {
     analogWrite(redLedPin, 0);
     analogWrite(yellowLedPin, 0);
     analogWrite(greenLedPin, 1023); // inverted logic GPIO02
@@ -437,7 +478,6 @@ double CalculateDistance(int wifiPower) {
   double exp = (27.55 - (20 * log10(wifiChannel.frequency)) + abs(wifiPower)) / 20.0;
   return pow(10.0, exp);
 }
-
 
 String MacToString(const unsigned char* mac) {
     char buf[20];
