@@ -28,23 +28,20 @@ const int batteryLevelPin = A0;
 const int batterySamplingSize = 10;
 int batteryReadings[batterySamplingSize]; // sampling size
 int batterySamples = 0;
-const int batteryCheckInterval = 300000; // ms - 5mins
+const int batteryCheckInterval = 300000; // ms - 5 mins
 unsigned long lastBatteryCheck = 0;
 int batteryCharge = 3;
 
 // Inputs
 const int buttonPin = 12; // 12
 const int usb5vPin = 13; // 13
-int usb5vState;
-int reading;
-int previous = LOW;
-
-// Debounce
-unsigned long lastDebounce = 0;
-unsigned long debounceDelay = 50;
+byte reading = LOW;
+byte unbounce = LOW;
+byte previous = HIGH;
+byte usb5vState;
 
 // Alarms and info notification
-int highAlarmLevel = 50; // <------------------------ ALARM LEVEL
+byte highAlarmLevel = 50; // <------------------------ ALARM LEVEL
 byte alarmState = 0;
 byte currentAlarm = 0;
 int lowAlarmLevel = 0;
@@ -71,16 +68,16 @@ const int alarmStandByDuration=250;
 const int infoOnDuration=500;
 const int infoStandbyDuration[4] = { 0, 1000, 3500, 6000 }; //ms, based on battery level
 
-// Button
+// Button Code
 const int shortPush = 200; //ms
-const int mediumPush = 1000; //ms
-const int longPush = 2000; //ms
-const int turnOffPush = 3000; //ms
-const int pushInterval = 450; // ms
-unsigned long lastShortPush = 0;
-unsigned long buttonPressedStart = 0;
-int shortPushCounter = 0;
-bool buttonPressed = false;
+const int longPush = shortPush * 4; //ms
+const int turnOffPush = 3000;
+const int endRead = shortPush * 5; //ms - pause after a character is enter
+byte charsRead; // max 4
+int codeRead;
+bool readingButton = false;
+unsigned long lastReadStart = 0;
+unsigned long lastReadEnd = 0;
 
 // Physical feedback
 const int alarmFrequency = 550; //Hz
@@ -96,12 +93,14 @@ char msg[64];
 
 // Snooze
 bool snoozed = false;
-const int snoozePeriod = 10000; // 5mins - 300000
+const int snoozePeriod = 300000; // 5mins - 300000
 unsigned long snoozeStart = 0;
 
 ////////////////////////////////////////////////////////////////////////////////////////////
 
 void setup() {
+
+    ResetButtonRead();
 
     pinMode(redLedPin, OUTPUT);
     pinMode(yellowLedPin, OUTPUT);
@@ -144,33 +143,42 @@ void ActivateAccessPoint() {
 }
 
 void loop() {
-    char incomingMac[25];
-    char incomingSSID[25];
     byte readPowerPercentage = 0;
     bool networksFound = false;
     unsigned long currentMillis = millis();
 
     CheckUSB5v(currentMillis);
 
+    unbounce = digitalRead(buttonPin);
+    delay(25);
     reading = digitalRead(buttonPin);
-    if (reading == HIGH) {
-        analogWrite(yellowLedPin, 0);
-        feedbackEnabled = true;
-    } else {
-        analogWrite(yellowLedPin, onAnalogDutyCycle );
-        feedbackEnabled = false;
+
+    if (reading == unbounce) {
+        if (reading == HIGH && previous == LOW) {
+            analogWrite(yellowLedPin, 0);
+            previous = HIGH;
+            readingButton = false;
+            lastReadEnd = currentMillis;
+
+            int elapsedTime = lastReadEnd - lastReadStart;
+            CheckButton(elapsedTime);
+        }
+        else if (reading == LOW && previous == HIGH) {
+            analogWrite(yellowLedPin, onAnalogDutyCycle );
+            previous = LOW;
+            readingButton = true;
+            lastReadStart = currentMillis;
+        }
     }
 
-    if (reading == HIGH && previous == LOW) {
-        previous = HIGH;
-        buttonPressed = false;
-        CheckButton(currentMillis);
-    }
-    else if (reading == LOW && previous == HIGH) {
-        previous = LOW;
-        buttonPressed = true;
-        ClearFeedback();
-        buttonPressedStart = currentMillis;
+    if (charsRead > 1 && !readingButton) {
+        if (currentMillis - lastReadEnd > endRead) {
+            if(charsRead > 2) {
+                ProcessButtonCommand();
+            } else {
+                ResetButtonRead();
+            }
+        }
     }
 
     if (snoozed) {
@@ -194,6 +202,9 @@ void loop() {
             lastNetworkFound = currentMillis;
 
             networksFound = true;
+
+            //char incomingMac[25];
+            //char incomingSSID[25];
             //WiFi.BSSIDstr(i).toCharArray(incomingMac, 25);
             //WiFi.SSID(i).toCharArray(incomingSSID, 25);
             //Serial.printf("[%s] [%s]\n ", incomingSSID, incomingMac);
@@ -314,67 +325,65 @@ void PlayPhysicalFeedback(bool turnOn) {
     }
 }
 
-void CheckButton(unsigned long currentMillis) {
-    int elapsedTime = currentMillis - buttonPressedStart;
-    int pushType = 0;
+void CheckButton(int elapsedTime) {
 
-    if (elapsedTime <= shortPush){
-        pushType = 1;
-        if (currentMillis - lastShortPush <= pushInterval) {
-          shortPushCounter ++;
-        } else {
-            shortPushCounter = 1;
-        }
-        lastShortPush = currentMillis;
+    if (elapsedTime <= shortPush) {
+        Serial.printf("short push\n");
+        codeRead += (1 *  pow(10, 5 - charsRead));
+    } else if (elapsedTime <= longPush) {
+        Serial.printf("long push\n");
+        codeRead += (2 *  pow(10, 5 - charsRead));
     } else if (elapsedTime >= turnOffPush) {
-        pushType = 4;
-    } else if (elapsedTime >= longPush) {
-        pushType = 3;
-    } else if (elapsedTime >= mediumPush) {
-        pushType = 2; // not in use
-    }
-
-    if (pushType == 1 && shortPushCounter == 3){
-        Serial.printf("Let's Snooze\n");
-        Snooze(currentMillis);
+        ByeBye();
         return;
     }
 
-  if (pushType == 3 && shortPushCounter == 1) {
-    Serial.println("Long push - DEACTIVATE the TONE ALARM");
-    shortPushCounter = 0;
+    charsRead++;
 
-    toneAlarmActive = false;
-    return;
-  }
-
-  if (pushType == 3 && shortPushCounter == 2) {
-    Serial.println("Long push - DEACTIVATE both TONE ALARM and VIBRATION");
-    shortPushCounter = 0;
-
-    toneAlarmActive = false;
-    vibrationAlarmActive = false;
-    return;
-  }
-
-  if (pushType == 4 && shortPushCounter == 2) {
-    // call shut down here
-    Serial.println("OTA");
-    return;
-  }
-
-  if (pushType == 4 && shortPushCounter == 0) {
-    // call shut down here
-    ByeBye(currentMillis);
-    return;
-  }
+    if(charsRead > 5) {
+        ProcessButtonCommand();
+    }
 }
 
-void Snooze(unsigned long currentMillis) {
+void ProcessButtonCommand() {
+    switch(codeRead) {
+        case 11100:
+            Serial.printf("S: snooze\n");
+            Snooze();
+            break;
+        case 12000:
+            Serial.printf("A: no sound\n");
+            toneAlarmActive = false;
+            break;
+        case 11200:
+            Serial.printf("U: no sound or vibration\n");
+            toneAlarmActive = false;
+            vibrationAlarmActive = false;
+            break;
+        case 22200:
+            Serial.printf("O: OTA Update\n");
+            OTAUpdate();
+            break;
+        case 21220:
+            Serial.printf("Y: Upload alarm data\n");
+            UploadAlarmData();
+            break;
+    }
+    ResetButtonRead();
+}
+
+void OTAUpdate() {
+
+}
+
+void UploadAlarmData() {
+
+}
+
+void Snooze() {
     ClearFeedback();
 
-    shortPushCounter = 0;
-    snoozeStart = currentMillis;
+    snoozeStart = millis();
     snoozed = true;
 }
 
@@ -384,11 +393,12 @@ void CheckUSB5v(unsigned long currentMillis) {
         delay(300);
         usb5vState = digitalRead(usb5vPin);
         if (usb5vState == LOW) {
-           ByeBye(currentMillis);
+           ByeBye();
            return;
         }
     }
 }
+
 void StartUp() {
     analogWrite(greenLedPin, 768); // inverted logic GPIO02
     delay(300);
@@ -399,8 +409,7 @@ void StartUp() {
     analogWrite(greenLedPin, 1023); //
 }
 
-void ByeBye(unsigned long currentMillis) {
-    Snooze(currentMillis);
+void ByeBye() {
     feedbackEnabled = false;
 
     for(byte i = 0; i<3; i++) {
@@ -415,6 +424,11 @@ void ByeBye(unsigned long currentMillis) {
     Serial.println("Turn off");
     digitalWrite(stayOnPin, LOW);
     delay(5000);
+}
+
+void ResetButtonRead() {
+    charsRead = 1;
+    codeRead = 0;
 }
 
 void CheckBattery(unsigned long currentMillis) {
