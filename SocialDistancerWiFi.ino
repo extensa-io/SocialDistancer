@@ -9,8 +9,14 @@
 char message[100];
 
 // Read
-const byte readsSize = 24;
+const byte readsSize = 15;
 FastRunningMedian<unsigned int,readsSize, 0> readsMedian;
+
+// Alarm period
+int alarmCheckInterval = 1600; // ms
+unsigned long alarmCheckStarts = 0;
+const int alarmOnDuration=250;
+const int alarmStandByDuration=250;
 
 // Outputs
 const int greenLedPin = 2; // inverted logic
@@ -58,12 +64,6 @@ bool feedbackEnabled  = false;
 int lastPeriodOnStart = 0;
 int lastPeriodOffStart = 0;
 
-// Alarm period
-int alarmCheckInterval = 1500; // ms
-unsigned long alarmCheckStarts = 0;
-const int alarmOnDuration=250;
-const int alarmStandByDuration=250;
-
 // Info period
 const int infoOnDuration=500;
 const int infoStandbyDuration[4] = { 0, 1000, 3500, 6000 }; //ms, based on battery level
@@ -80,7 +80,8 @@ unsigned long lastReadStart = 0;
 unsigned long lastReadEnd = 0;
 
 // Physical feedback
-const int alarmFrequency = 550; //Hz
+byte pfCounter = 0;
+byte pfPeriod = 12; // 3 seconds
 
 //AP variables
 const WLANChannel wifiChannel = WiFiChannels[11];
@@ -93,8 +94,12 @@ char msg[64];
 
 // Snooze
 bool snoozed = false;
-const int snoozePeriod = 300000; // 5mins - 300000
+const unsigned long snoozePeriod = 300000; // 5mins - 300000
 unsigned long snoozeStart = 0;
+
+byte operationMode = 1; //1-SocialDistancer 2-OTA Update 3-Data Upload
+
+const bool printMessage = true;
 
 ////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -129,8 +134,6 @@ void ActivateAccessPoint() {
     WiFi.macAddress(mac);
     netName = ssid + MacToString(mac);
 
-    ResetWifi();
-
     WiFi.enableAP(true);
     delay(200);
     WiFi.mode(WIFI_STA);
@@ -143,8 +146,6 @@ void ActivateAccessPoint() {
 }
 
 void loop() {
-    byte readPowerPercentage = 0;
-    bool networksFound = false;
     unsigned long currentMillis = millis();
 
     CheckUSB5v(currentMillis);
@@ -160,8 +161,7 @@ void loop() {
             readingButton = false;
             lastReadEnd = currentMillis;
 
-            int elapsedTime = lastReadEnd - lastReadStart;
-            CheckButton(elapsedTime);
+            CheckButton(currentMillis);
         }
         else if (reading == LOW && previous == HIGH) {
             analogWrite(yellowLedPin, onAnalogDutyCycle );
@@ -171,15 +171,35 @@ void loop() {
         }
     }
 
+    if(readingButton)
+        return;
+
     if (charsRead > 1 && !readingButton) {
         if (currentMillis - lastReadEnd > endRead) {
             if(charsRead > 2) {
-                ProcessButtonCommand();
+                ProcessButtonCommand(currentMillis);
             } else {
                 ResetButtonRead();
             }
         }
     }
+
+    switch(operationMode) {
+        case 1:
+            RunSocialDistancer(currentMillis);
+            break;
+        case 2:
+            RunOTAUpdate(currentMillis);
+            break;
+        case 3:
+            RunDataUpload(currentMillis);
+            break;
+    }
+}
+
+void RunSocialDistancer(unsigned long currentMillis) {
+    byte readPowerPercentage = 0;
+    bool networksFound = false;
 
     if (snoozed) {
         if (currentMillis - snoozeStart < snoozePeriod) {
@@ -203,11 +223,13 @@ void loop() {
 
             networksFound = true;
 
-            //char incomingMac[25];
-            //char incomingSSID[25];
-            //WiFi.BSSIDstr(i).toCharArray(incomingMac, 25);
-            //WiFi.SSID(i).toCharArray(incomingSSID, 25);
-            //Serial.printf("[%s] [%s]\n ", incomingSSID, incomingMac);
+            if (printMessage && 1==12) {
+                char incomingMac[25];
+                char incomingSSID[25];
+                WiFi.BSSIDstr(i).toCharArray(incomingMac, 25);
+                WiFi.SSID(i).toCharArray(incomingSSID, 25);
+                Serial.printf("[%s] [%s]\n ", incomingSSID, incomingMac);
+            }
         }
     }
     if (highestPower > 0) {
@@ -225,10 +247,20 @@ void loop() {
     WiFi.scanDelete();
 }
 
+void RunOTAUpdate(unsigned long currentMillis) {
+
+}
+
+void RunDataUpload(unsigned long currentMillis) {
+
+}
+
+///////////////////////////////////////////////////////////////////////////////////
+
 void TriggerAlarm() {
 
     byte currentPower = readsMedian.getMedian();
-    Serial.printf("[%d]\n", currentPower);
+    if (printMessage) Serial.printf("[%d]\n", currentPower);
 
     ClearReads();
 
@@ -241,19 +273,21 @@ void TriggerAlarm() {
 
     if (alarmState != currentAlarm) {
         currentAlarm = alarmState;
+
         switch(alarmState) {
             case 1:
-                Serial.printf("HIGH ALARM [%d]\n", currentPower);
+                if (printMessage) Serial.printf("HIGH ALARM [%d]\n", currentPower);
                 break;
             case 2:
-                Serial.printf("LOW [%d]\n", currentPower);
+                if (printMessage) Serial.printf("LOW [%d]\n", currentPower);
                 break;
             default:
-                Serial.printf("no alarm\n");
+                if (printMessage) Serial.printf("no alarm\n");
+                pfCounter = 0;
                 break;
         }
-    }
 
+    }
     alarmCheckStarts = currentMillis;
 }
 
@@ -287,7 +321,7 @@ void PlayLed(unsigned long currentMillis) {
             break;
     }
 
-    if(ledState == HIGH && currentMillis - lastPeriodOnStart >= onPeriod) {
+    if (ledState == HIGH && currentMillis - lastPeriodOnStart >= onPeriod) {
 
         ledState = LOW;
         ClearFeedback(); // stop all feedback;
@@ -304,34 +338,34 @@ void PlayLed(unsigned long currentMillis) {
                 analogWrite(currentLed, onAnalogDutyCycle );
             }
             if(givePhysicalFeedback) {
-                PlayPhysicalFeedback(true);
+                PlayPhysicalFeedback();
             }
         }
     }
 }
 
-void PlayPhysicalFeedback(bool turnOn) {
+void PlayPhysicalFeedback() {
+    pfCounter ++;
 
-    if (turnOn & toneAlarmActive) {
-        analogWrite(piezoPin, onAnalogDutyCycle);
-    } else {
-        analogWrite(piezoPin, 0);
-    }
-
-    if (turnOn && vibrationAlarmActive) {
-        digitalWrite(vibrationPin, HIGH);
-    } else {
-        digitalWrite(vibrationPin, LOW);
+    if (pfPeriod == 12) {
+        if (toneAlarmActive) {
+            analogWrite(piezoPin, onAnalogDutyCycle);
+        }
+        if (vibrationAlarmActive) {
+            digitalWrite(vibrationPin, HIGH);
+        }
+        pfCounter = 0;
     }
 }
 
-void CheckButton(int elapsedTime) {
+void CheckButton(unsigned long currentMillis) {
 
+    int elapsedTime = lastReadEnd - lastReadStart;
     if (elapsedTime <= shortPush) {
-        Serial.printf("short push\n");
+        if (printMessage) Serial.printf("short push\n");
         codeRead += (1 *  pow(10, 5 - charsRead));
     } else if (elapsedTime <= longPush) {
-        Serial.printf("long push\n");
+        if (printMessage) Serial.printf("long push\n");
         codeRead += (2 *  pow(10, 5 - charsRead));
     } else if (elapsedTime >= turnOffPush) {
         ByeBye();
@@ -341,49 +375,50 @@ void CheckButton(int elapsedTime) {
     charsRead++;
 
     if(charsRead > 5) {
-        ProcessButtonCommand();
+        ProcessButtonCommand(currentMillis);
     }
 }
 
-void ProcessButtonCommand() {
+void ProcessButtonCommand(unsigned long currentMillis) {
+
+    if (printMessage) Serial.printf("processing button... ");
     switch(codeRead) {
         case 11100:
-            Serial.printf("S: snooze\n");
-            Snooze();
+            if (printMessage) Serial.printf("S: snooze\n");
+            Snooze(currentMillis);
             break;
         case 12000:
-            Serial.printf("A: no sound\n");
+            if (printMessage) Serial.printf("A: no sound\n");
             toneAlarmActive = false;
             break;
         case 11200:
-            Serial.printf("U: no sound or vibration\n");
+            if (printMessage) Serial.printf("U: no sound or vibration\n");
             toneAlarmActive = false;
             vibrationAlarmActive = false;
             break;
         case 22200:
-            Serial.printf("O: OTA Update\n");
-            OTAUpdate();
+            if (printMessage) Serial.printf("O: OTA Update\n");
+            OTAUpdate(currentMillis);
             break;
         case 21220:
-            Serial.printf("Y: Upload alarm data\n");
-            UploadAlarmData();
+            if (printMessage) Serial.printf("Y: Upload alarm data\n");
+            UploadAlarmData(currentMillis);
             break;
     }
     ResetButtonRead();
 }
 
-void OTAUpdate() {
+void OTAUpdate(unsigned long currentMillis) {
 
 }
 
-void UploadAlarmData() {
+void UploadAlarmData(unsigned long currentMillis) {
 
 }
 
-void Snooze() {
+void Snooze(unsigned long currentMillis) {
     ClearFeedback();
-
-    snoozeStart = millis();
+    snoozeStart = currentMillis;
     snoozed = true;
 }
 
@@ -406,7 +441,7 @@ void StartUp() {
     digitalWrite(vibrationPin, HIGH);
     delay(500);
     digitalWrite(vibrationPin, LOW);
-    analogWrite(greenLedPin, 1023); //
+    analogWrite(greenLedPin, 1023);
 }
 
 void ByeBye() {
@@ -427,6 +462,7 @@ void ByeBye() {
 }
 
 void ResetButtonRead() {
+    if (printMessage) Serial.printf("resetting button... ");
     charsRead = 1;
     codeRead = 0;
 }
@@ -466,22 +502,15 @@ void ClearFeedback() {
     analogWrite(redLedPin, 0);
     analogWrite(yellowLedPin, 0);
     analogWrite(greenLedPin, 1023); // inverted logic GPIO02
-    PlayPhysicalFeedback(false);
+
+    analogWrite(piezoPin, 0);
+    digitalWrite(vibrationPin, LOW);
 }
 
 void ClearReads() {
     for (int i = 0; i<readsSize; i++) {
         readsMedian.addValue(0);
     }
-}
-
-void ResetWifi() {
-
-    WiFi.mode(WIFI_OFF);
-    delay( 1 );
-
-    WiFi.mode(WIFI_STA);
-    delay( 1 );
 }
 
 int CalculatePercentage(int powerLevel) {
