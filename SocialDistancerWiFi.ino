@@ -3,9 +3,13 @@
 // http://gosocialdistancer.com/
 
 #include "ESP8266WiFi.h"
+#include "ESP8266httpUpdate.h"
 #include "FastRunningMedian.h"
 #include "pitches.h"
 
+extern "C" {
+    #include "user_interface.h"
+}
 char message[100];
 
 // Read
@@ -13,10 +17,10 @@ const byte readsSize = 15;
 FastRunningMedian<unsigned int,readsSize, 0> readsMedian;
 
 // Alarm period
-int alarmCheckInterval = 1600; // ms
+int alarmCheckInterval = 1300; // ms
 unsigned long alarmCheckStarts = 0;
-const int alarmOnDuration=250;
-const int alarmStandByDuration=250;
+const int alarmOnDuration = 250;
+const int alarmStandByDuration = 250;
 
 // Outputs
 const int greenLedPin = 2; // inverted logic
@@ -27,7 +31,8 @@ const int piezoPin = 5;
 const int stayOnPin = 14;
 
 const int analogWriteFrequency = 3500;
-const int onAnalogDutyCycle  = 512;
+const int ledIntensity = 50; // 1 - 1023
+const int onAnalogDutyCycle = 512;
 
 // Battery meter
 const int batteryLevelPin = A0;
@@ -47,7 +52,7 @@ byte previous = HIGH;
 byte usb5vState;
 
 // Alarms and info notification
-byte highAlarmLevel = 50; // <------------------------ ALARM LEVEL
+byte highAlarmLevel = 57; // <------------------------ ALARM LEVEL
 byte alarmState = 0;
 byte currentAlarm = 0;
 int lowAlarmLevel = 0;
@@ -90,6 +95,9 @@ String ssid = "Sx";
 byte mac[6];
 String netName;
 
+// Open WiFI connection
+#define MAX_CONNECT_TIME  30000
+
 char msg[64];
 
 // Snooze
@@ -130,6 +138,7 @@ void setup() {
 }
 
 void ActivateAccessPoint() {
+    WiFi.persistent(false);
 
     WiFi.macAddress(mac);
     netName = ssid + MacToString(mac);
@@ -137,12 +146,11 @@ void ActivateAccessPoint() {
     WiFi.enableAP(true);
     delay(200);
     WiFi.mode(WIFI_STA);
-    WiFi.setOutputPower(powerLevel);
 
-    Serial.println(WiFi.softAP(netName, "", wifiChannel.channelNumber, true) ? netName + " AP Ready" : "AP Failed!"); // hidden
+    Serial.println(WiFi.softAP(netName, "", wifiChannel.channelNumber, true) ? netName + " AP Ready" : "AP Failed!");
     delay(200);
     Serial.println("AP setup done");
-    Serial.println("SOCIAL DISTANCER READY");
+    Serial.println("SOCIAL DISTANCER READY v1.0.1");
 }
 
 void loop() {
@@ -160,11 +168,10 @@ void loop() {
             previous = HIGH;
             readingButton = false;
             lastReadEnd = currentMillis;
-
             CheckButton(currentMillis);
         }
         else if (reading == LOW && previous == HIGH) {
-            analogWrite(yellowLedPin, onAnalogDutyCycle );
+            analogWrite(yellowLedPin, ledIntensity);
             previous = LOW;
             readingButton = true;
             lastReadStart = currentMillis;
@@ -174,7 +181,7 @@ void loop() {
     if(readingButton)
         return;
 
-    if (charsRead > 1 && !readingButton) {
+    if (charsRead > 1) {
         if (currentMillis - lastReadEnd > endRead) {
             if(charsRead > 2) {
                 ProcessButtonCommand(currentMillis);
@@ -182,6 +189,7 @@ void loop() {
                 ResetButtonRead();
             }
         }
+        return;
     }
 
     switch(operationMode) {
@@ -194,10 +202,13 @@ void loop() {
         case 3:
             RunDataUpload(currentMillis);
             break;
+        default:
+            break;
     }
 }
 
 void RunSocialDistancer(unsigned long currentMillis) {
+    system_phy_set_max_tpw(powerLevel);
     byte readPowerPercentage = 0;
     bool networksFound = false;
 
@@ -223,13 +234,12 @@ void RunSocialDistancer(unsigned long currentMillis) {
 
             networksFound = true;
 
-            if (printMessage && 1==12) {
-                char incomingMac[25];
-                char incomingSSID[25];
-                WiFi.BSSIDstr(i).toCharArray(incomingMac, 25);
-                WiFi.SSID(i).toCharArray(incomingSSID, 25);
-                Serial.printf("[%s] [%s]\n ", incomingSSID, incomingMac);
-            }
+             //   char incomingMac[25];
+             //   char incomingSSID[25];
+             //   WiFi.BSSIDstr(i).toCharArray(incomingMac, 25);
+             //   WiFi.SSID(i).toCharArray(incomingSSID, 25);
+             //   Serial.printf("[%s] [%s]\n ", incomingSSID, incomingMac);
+
         }
     }
     if (highestPower > 0) {
@@ -249,6 +259,24 @@ void RunSocialDistancer(unsigned long currentMillis) {
 
 void RunOTAUpdate(unsigned long currentMillis) {
 
+    if (ConnectToOpenWifi()) {
+
+        Serial.println("Running OTA - http://www.stomperapp.com/sd/SocialDistancerWiFi.ino.nodemcu.bin");
+        t_httpUpdate_return ret = ESPhttpUpdate.update("stomperapp.com", 80, "/sd/SocialDistancerWiFi.ino.nodemcu.bin");
+        switch (ret) {
+            case HTTP_UPDATE_FAILED:
+                Serial.printf("HTTP_UPDATE_FAILED Error (%d): %s\n", ESPhttpUpdate.getLastError(), ESPhttpUpdate.getLastErrorString().c_str());
+                break;
+            case HTTP_UPDATE_NO_UPDATES:
+                Serial.println("HTTP_UPDATE_NO_UPDATES");
+                break;
+            case HTTP_UPDATE_OK:
+                Serial.println("HTTP_UPDATE_OK");
+                ESP.restart();
+                break;
+        }
+    }
+    ByeBye();
 }
 
 void RunDataUpload(unsigned long currentMillis) {
@@ -333,9 +361,9 @@ void PlayLed(unsigned long currentMillis) {
         lastPeriodOnStart = currentMillis;
         if (feedbackEnabled) {
             if (currentLed == greenLedPin) {
-                analogWrite(currentLed, 0); // inverted logic GPIO02
+                analogWrite(currentLed, 1023 - ledIntensity); // inverted logic GPIO02
             } else {
-                analogWrite(currentLed, onAnalogDutyCycle );
+                analogWrite(currentLed, ledIntensity );
             }
             if(givePhysicalFeedback) {
                 PlayPhysicalFeedback();
@@ -347,7 +375,7 @@ void PlayLed(unsigned long currentMillis) {
 void PlayPhysicalFeedback() {
     pfCounter ++;
 
-    if (pfPeriod == 12) {
+    if (pfCounter == 12) {
         if (toneAlarmActive) {
             analogWrite(piezoPin, onAnalogDutyCycle);
         }
@@ -364,14 +392,13 @@ void CheckButton(unsigned long currentMillis) {
     if (elapsedTime <= shortPush) {
         if (printMessage) Serial.printf("short push\n");
         codeRead += (1 *  pow(10, 5 - charsRead));
-    } else if (elapsedTime <= longPush) {
-        if (printMessage) Serial.printf("long push\n");
-        codeRead += (2 *  pow(10, 5 - charsRead));
     } else if (elapsedTime >= turnOffPush) {
         ByeBye();
         return;
+    } else {
+        if (printMessage) Serial.printf("long push\n");
+        codeRead += (2 *  pow(10, 5 - charsRead));
     }
-
     charsRead++;
 
     if(charsRead > 5) {
@@ -398,18 +425,14 @@ void ProcessButtonCommand(unsigned long currentMillis) {
             break;
         case 22200:
             if (printMessage) Serial.printf("O: OTA Update\n");
-            OTAUpdate(currentMillis);
+            operationMode = 2;
             break;
-        case 21220:
+        case 11221:
             if (printMessage) Serial.printf("Y: Upload alarm data\n");
             UploadAlarmData(currentMillis);
             break;
     }
     ResetButtonRead();
-}
-
-void OTAUpdate(unsigned long currentMillis) {
-
 }
 
 void UploadAlarmData(unsigned long currentMillis) {
@@ -422,6 +445,40 @@ void Snooze(unsigned long currentMillis) {
     snoozed = true;
 }
 
+///////////////////////////////////////////////////////////////////////////////////
+bool ConnectToOpenWifi() {
+    bool connected = false;
+    /* Clear previous modes. */
+    WiFi.softAPdisconnect();
+    WiFi.disconnect();
+    WiFi.mode(WIFI_STA);
+
+    delay(shortPush);
+
+    int n = WiFi.scanNetworks(); // sync, hidden
+
+    for (int i = 0; i < n; i++) {
+
+        if (printMessage) Serial.printf("Trying to connect to %s\n", WiFi.SSID(i).c_str());
+        WiFi.begin(WiFi.SSID(i));
+        unsigned short tries = 0;
+
+        while (WiFi.status() != WL_CONNECTED && tries < 3) {
+            if (printMessage) Serial.printf("...\n");
+            tries++;
+            delay(longPush * tries);
+        }
+        if(WiFi.status() == WL_CONNECTED) {
+            Serial.printf("Connected to %s\n",  WiFi.SSID(i).c_str());
+            Serial.println(WiFi.localIP());
+            return true;
+        }
+    }
+    Serial.println("Couldn't find open WiFi");
+    return false;
+}
+
+///////////////////////////////////////////////////////////////////////////////////
 void CheckUSB5v(unsigned long currentMillis) {
     usb5vState = digitalRead(usb5vPin);
     if (usb5vState == LOW) {
@@ -435,34 +492,65 @@ void CheckUSB5v(unsigned long currentMillis) {
 }
 
 void StartUp() {
-    analogWrite(greenLedPin, 768); // inverted logic GPIO02
-    delay(300);
+    PlayFeedbackSequence(2);
     digitalWrite(stayOnPin, HIGH);
     digitalWrite(vibrationPin, HIGH);
-    delay(500);
+    delay(shortPush);
     digitalWrite(vibrationPin, LOW);
-    analogWrite(greenLedPin, 1023);
+}
+
+void PlayFeedbackSequence(byte sequence) {
+    switch(sequence) {
+        case 1: // ByeBye
+            for(byte i = 0; i<3; i++) {
+                digitalWrite(vibrationPin, HIGH);
+                analogWrite(redLedPin, 0);
+                delay(100);
+                digitalWrite(vibrationPin, LOW);
+                analogWrite(redLedPin, 127);
+                delay(100);
+                analogWrite(redLedPin, 0);
+            }
+            break;
+        case 2: // StartUp
+            for (int i=0; i<3 ; i++) {
+                analogWrite(redLedPin, ledIntensity);
+                delay(shortPush);
+                analogWrite(redLedPin, 0);
+                analogWrite(yellowLedPin, ledIntensity);
+                delay(shortPush);
+                analogWrite(yellowLedPin, 0);
+                analogWrite(greenLedPin, 1023 - ledIntensity); // inverted logic GPIO02
+                delay(shortPush);
+                analogWrite(greenLedPin, 1023); // inverted logic GPIO02
+            }
+            break;
+        case 3: // OTA
+            for (int i=0; i<3 ; i++) {
+                analogWrite(yellowLedPin, ledIntensity);
+                delay(shortPush);
+                analogWrite(yellowLedPin, 0);
+                analogWrite(redLedPin, ledIntensity);
+                delay(shortPush);
+                analogWrite(redLedPin, 0);
+            }
+            break;
+    }
 }
 
 void ByeBye() {
     feedbackEnabled = false;
+    operationMode = 0;
 
-    for(byte i = 0; i<3; i++) {
-     digitalWrite(vibrationPin, HIGH);
-     analogWrite(redLedPin, 0);
-     delay(100);
-     digitalWrite(vibrationPin, LOW);
-     analogWrite(redLedPin, 127);
-     delay(100);
-    }
-    analogWrite(redLedPin, 0);
+    PlayFeedbackSequence(1);
+
     Serial.println("Turn off");
     digitalWrite(stayOnPin, LOW);
     delay(5000);
 }
 
 void ResetButtonRead() {
-    if (printMessage) Serial.printf("resetting button... ");
+    if (printMessage) Serial.printf("resetting button after %d\n", codeRead);
     charsRead = 1;
     codeRead = 0;
 }
@@ -476,21 +564,19 @@ void CheckBattery(unsigned long currentMillis) {
     if (batterySamples == batterySamplingSize)
     {
         float average;
-        for (int i=0; i<batterySamplingSize; i++)
+        for (int i=0; i<batterySamplingSize; i++) {
             average += batteryReadings[i];
+        }
         average /= batterySamplingSize;
 
-        //remove this when battery reads are calibrated
-        average = 100;
-
         if(average < 10){
-         batteryCharge = 0;
+            batteryCharge = 0;
         } else if (average < 40){
-         batteryCharge = 1;
+            batteryCharge = 1;
         } else if (average < 70) {
-         batteryCharge = 2;
+            batteryCharge = 2;
         } else {
-         batteryCharge = 3;
+            batteryCharge = 3;
         }
         batterySamples = 0;
         Serial.printf("Battery read at %lf\n", average);
