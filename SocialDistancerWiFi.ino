@@ -375,14 +375,22 @@ void PlayLed(unsigned long currentMillis) {
 void PlayPhysicalFeedback() {
     pfCounter ++;
 
-    if (pfCounter == 12) {
-        if (toneAlarmActive) {
-            analogWrite(piezoPin, onAnalogDutyCycle);
-        }
-        if (vibrationAlarmActive) {
-            digitalWrite(vibrationPin, HIGH);
-        }
-        pfCounter = 0;
+    switch (pfCounter) {
+        case 1:
+        case 6:
+            if (toneAlarmActive) {
+                analogWrite(piezoPin, onAnalogDutyCycle);
+            }
+            break;
+        case 2:
+        case 7:
+            if (vibrationAlarmActive) {
+                digitalWrite(vibrationPin, HIGH);
+            }
+            break;
+        case 12:
+            pfCounter = 0;
+            break;
     }
 }
 
@@ -446,6 +454,7 @@ void Snooze(unsigned long currentMillis) {
 }
 
 ///////////////////////////////////////////////////////////////////////////////////
+
 bool ConnectToOpenWifi() {
     bool connected = false;
     /* Clear previous modes. */
