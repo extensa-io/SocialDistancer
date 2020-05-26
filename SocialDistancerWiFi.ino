@@ -13,7 +13,7 @@ extern "C" {
 char message[100];
 
 // Read
-const byte readsSize = 15;
+const byte readsSize = 5;
 FastRunningMedian<unsigned int,readsSize, 0> readsMedian;
 
 // Alarm period
@@ -242,8 +242,10 @@ void RunSocialDistancer(unsigned long currentMillis) {
 
         }
     }
-    if (highestPower > 0) {
+    if (highestPower > (highAlarmLevel - 5)) {
         readsMedian.addValue(highestPower);
+    } else {
+        readsMedian.addValue(highAlarmLevel - 10);
     }
 
     if(currentMillis - lastNetworkFound >= alarmCheckInterval) {
