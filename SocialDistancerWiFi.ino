@@ -13,13 +13,14 @@ extern "C" {
 char message[100];
 
 // Read
-const byte readsSize = 5;
+const byte readsSize = 6;
+byte reads = 0;
 FastRunningMedian<unsigned int,readsSize, 0> readsMedian;
 
 // Alarm period
-int alarmCheckInterval = 1300; // ms
+int alarmCheckInterval = 1000; // ms
 unsigned long alarmCheckStarts = 0;
-const int alarmOnDuration = 250;
+const int alarmOnDuration = 2500000;
 const int alarmStandByDuration = 250;
 
 // Outputs
@@ -31,7 +32,7 @@ const int piezoPin = 5;
 const int stayOnPin = 14;
 
 const int analogWriteFrequency = 3500;
-const int ledIntensity = 50; // 1 - 1023
+const int ledIntensity = 75; // 1 - 1023
 const int onAnalogDutyCycle = 512;
 
 // Battery meter
@@ -52,7 +53,7 @@ byte previous = HIGH;
 byte usb5vState;
 
 // Alarms and info notification
-byte highAlarmLevel = 57; // <------------------------ ALARM LEVEL
+byte highAlarmLevel = 60; // <------------------------ ALARM LEVEL
 byte alarmState = 0;
 byte currentAlarm = 0;
 int lowAlarmLevel = 0;
@@ -86,11 +87,10 @@ unsigned long lastReadEnd = 0;
 
 // Physical feedback
 byte pfCounter = 0;
-byte pfPeriod = 12; // 3 seconds
 
 //AP variables
 const WLANChannel wifiChannel = WiFiChannels[11];
-const byte powerLevel = 0; // <------------------------ POWER LEVEL
+const byte powerLevel = 82; // <------------------------ POWER LEVEL (0-82)
 String ssid = "Sx";
 byte mac[6];
 String netName;
@@ -228,7 +228,8 @@ void RunSocialDistancer(unsigned long currentMillis) {
     for (int i = 0; i < n; i++) {
         if (WiFi.isHidden(i))
         {
-            readPowerPercentage = CalculatePercentage(WiFi.RSSI(i));
+            //readPowerPercentage = CalculatePercentage(WiFi.RSSI(i));
+            readPowerPercentage = 100 - abs(WiFi.RSSI(i));
             highestPower = readPowerPercentage > highestPower ? readPowerPercentage : highestPower;
             lastNetworkFound = currentMillis;
 
@@ -240,19 +241,19 @@ void RunSocialDistancer(unsigned long currentMillis) {
              //   WiFi.SSID(i).toCharArray(incomingSSID, 25);
              //   Serial.printf("[%s] [%s]\n ", incomingSSID, incomingMac);
 
+            //if (printMessage) Serial.printf("{%d}\n", readPowerPercentage);
+
         }
     }
-    if (highestPower > (highAlarmLevel - 5)) {
+
+    if (networksFound) {
+        reads++;
         readsMedian.addValue(highestPower);
-    } else {
-        readsMedian.addValue(highAlarmLevel - 10);
     }
 
-    if(currentMillis - lastNetworkFound >= alarmCheckInterval) {
+    if(currentMillis - lastNetworkFound >= alarmCheckInterval && reads > 0) {
         ClearReads();
-    }
-
-    if (currentMillis - alarmCheckStarts >= alarmCheckInterval) {
+    } else if (currentMillis - alarmCheckStarts >= alarmCheckInterval || reads == readsSize) {
         TriggerAlarm();
     }
 
@@ -379,18 +380,18 @@ void PlayPhysicalFeedback() {
 
     switch (pfCounter) {
         case 1:
-        case 6:
-            if (toneAlarmActive) {
+        case 10:
+            if (toneAlarmActive && 1==2) {
                 analogWrite(piezoPin, onAnalogDutyCycle);
             }
             break;
         case 2:
-        case 7:
-            if (vibrationAlarmActive) {
+        case 11:
+            if (vibrationAlarmActive && 1==2) {
                 digitalWrite(vibrationPin, HIGH);
             }
             break;
-        case 12:
+        case 20:
             pfCounter = 0;
             break;
     }
@@ -608,6 +609,7 @@ void ClearReads() {
     for (int i = 0; i<readsSize; i++) {
         readsMedian.addValue(0);
     }
+    reads = 0;
 }
 
 int CalculatePercentage(int powerLevel) {
