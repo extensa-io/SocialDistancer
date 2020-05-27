@@ -20,7 +20,7 @@ FastRunningMedian<unsigned int,readsSize, 0> readsMedian;
 // Alarm period
 int alarmCheckInterval = 1000; // ms
 unsigned long alarmCheckStarts = 0;
-const int alarmOnDuration = 2500000;
+const int alarmOnDuration = 2500000; // high value to keep red LED on during testing
 const int alarmStandByDuration = 250;
 
 // Outputs
