@@ -20,7 +20,7 @@ FastRunningMedian<unsigned int,readsSize, 0> readsMedian;
 // Alarm period
 int alarmCheckInterval = 1000; // ms
 unsigned long alarmCheckStarts = 0;
-const int alarmOnDuration = 2500000; // high value to keep red LED on during testing
+const int alarmOnDuration = 250; // high value to keep red LED on during testing
 const int alarmStandByDuration = 250;
 
 // Outputs
@@ -53,7 +53,8 @@ byte previous = HIGH;
 byte usb5vState;
 
 // Alarms and info notification
-byte highAlarmLevel = 60; // <------------------------ ALARM LEVEL
+byte highAlarmLevel = 50; // <------------------------ ALARM THRESHOLD
+const byte powerLevel = 75; // <---------------------- POWER LEVEL (0-82)
 byte alarmState = 0;
 byte currentAlarm = 0;
 int lowAlarmLevel = 0;
@@ -90,7 +91,6 @@ byte pfCounter = 0;
 
 //AP variables
 const WLANChannel wifiChannel = WiFiChannels[11];
-const byte powerLevel = 82; // <------------------------ POWER LEVEL (0-82)
 String ssid = "Sx";
 byte mac[6];
 String netName;
@@ -253,6 +253,8 @@ void RunSocialDistancer(unsigned long currentMillis) {
 
     if(currentMillis - lastNetworkFound >= alarmCheckInterval && reads > 0) {
         ClearReads();
+        alarmState = 0;
+        pfCounter = 0;
     } else if (currentMillis - alarmCheckStarts >= alarmCheckInterval || reads == readsSize) {
         TriggerAlarm();
     }
@@ -299,27 +301,27 @@ void TriggerAlarm() {
         alarmState = 1;
     } else {
         alarmState = 0;
+        pfCounter = 0;
     }
-    unsigned long currentMillis = millis();
 
-    if (alarmState != currentAlarm) {
+    if (alarmState != currentAlarm && printMessage) {
         currentAlarm = alarmState;
+        ClearFeedback();
 
         switch(alarmState) {
             case 1:
-                if (printMessage) Serial.printf("HIGH ALARM [%d]\n", currentPower);
+                Serial.printf("HIGH ALARM [%d]\n", currentPower);
                 break;
             case 2:
-                if (printMessage) Serial.printf("LOW [%d]\n", currentPower);
+                Serial.printf("LOW [%d]\n", currentPower);
                 break;
             default:
-                if (printMessage) Serial.printf("no alarm\n");
-                pfCounter = 0;
+                Serial.printf("no alarm\n");
                 break;
         }
 
     }
-    alarmCheckStarts = currentMillis;
+    alarmCheckStarts = millis();
 }
 
 void PlayLed(unsigned long currentMillis) {
