@@ -4,18 +4,16 @@
 
 #include "ESP8266WiFi.h"
 #include "ESP8266httpUpdate.h"
-#include "FastRunningMedian.h"
+#include "ESP8266HTTPClient.h"
+#include "WiFiClientSecureBearSSL.h"
+
 #include "pitches.h"
+#include "env.h"
 
 extern "C" {
     #include "user_interface.h"
 }
 char message[100];
-
-// Read
-const byte readsSize = 6;
-byte reads = 0;
-FastRunningMedian<unsigned int,readsSize, 0> readsMedian;
 
 // Alarm period
 int alarmCheckInterval = 1000; // ms
@@ -53,8 +51,8 @@ byte previous = HIGH;
 byte usb5vState;
 
 // Alarms and info notification
-byte highAlarmLevel = 50; // <------------------------ ALARM THRESHOLD
-const byte powerLevel = 75; // <---------------------- POWER LEVEL (0-82)
+byte highAlarmLevel = 0; // <------------------------ ALARM THRESHOLD
+const byte powerLevel = 60; // <---------------------- POWER LEVEL (0-82)
 byte alarmState = 0;
 byte currentAlarm = 0;
 int lowAlarmLevel = 0;
@@ -91,12 +89,14 @@ byte pfCounter = 0;
 
 //AP variables
 const WLANChannel wifiChannel = WiFiChannels[11];
-String ssid = "Sx";
+String ssid = "SDx";
 byte mac[6];
 String netName;
 
 // Open WiFI connection
-#define MAX_CONNECT_TIME  30000
+#define MAX_CONNECT_TIME 30000
+const char* openWiFiSSID = "HotSusanaSpot";
+const char* openWiFiPassword = "";
 
 char msg[64];
 
@@ -105,9 +105,10 @@ bool snoozed = false;
 const unsigned long snoozePeriod = 300000; // 5mins - 300000
 unsigned long snoozeStart = 0;
 
-byte operationMode = 1; //1-SocialDistancer 2-OTA Update 3-Data Upload
+byte operationMode = 1; // 1-SocialDistancer 2-OTA Update 3-Data Upload
 
 const bool printMessage = true;
+bool alarming = true;
 
 ////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -147,10 +148,12 @@ void ActivateAccessPoint() {
     delay(200);
     WiFi.mode(WIFI_STA);
 
-    Serial.println(WiFi.softAP(netName, "", wifiChannel.channelNumber, true) ? netName + " AP Ready" : "AP Failed!");
+    Serial.println();
+    Serial.println(WiFi.softAP(netName, "", wifiChannel.channelNumber, false) ? netName + " AP Ready" : "AP Failed!");
     delay(200);
     Serial.println("AP setup done");
     Serial.println("SOCIAL DISTANCER READY v1.0.1");
+
 }
 
 void loop() {
@@ -209,8 +212,6 @@ void loop() {
 
 void RunSocialDistancer(unsigned long currentMillis) {
     system_phy_set_max_tpw(powerLevel);
-    byte readPowerPercentage = 0;
-    bool networksFound = false;
 
     if (snoozed) {
         if (currentMillis - snoozeStart < snoozePeriod) {
@@ -220,43 +221,33 @@ void RunSocialDistancer(unsigned long currentMillis) {
         }
     }
 
-    int n = WiFi.scanNetworks(false, true, wifiChannel.channelNumber); // sync, hidden
+    int n = WiFi.scanNetworks(false, false, wifiChannel.channelNumber); // sync, not hidden
 
-    PlayLed(currentMillis);
-
-    int highestPower = 0;
+    bool deviceFound = false;
+    String deviceSSID;
     for (int i = 0; i < n; i++) {
-        if (WiFi.isHidden(i))
+        deviceSSID = WiFi.SSID(i);
+        if (deviceSSID.substring(0,3) == ssid)
         {
-            //readPowerPercentage = CalculatePercentage(WiFi.RSSI(i));
-            readPowerPercentage = 100 - abs(WiFi.RSSI(i));
-            highestPower = readPowerPercentage > highestPower ? readPowerPercentage : highestPower;
-            lastNetworkFound = currentMillis;
-
-            networksFound = true;
-
-             //   char incomingMac[25];
-             //   char incomingSSID[25];
-             //   WiFi.BSSIDstr(i).toCharArray(incomingMac, 25);
-             //   WiFi.SSID(i).toCharArray(incomingSSID, 25);
-             //   Serial.printf("[%s] [%s]\n ", incomingSSID, incomingMac);
-
-            //if (printMessage) Serial.printf("{%d}\n", readPowerPercentage);
-
+            deviceFound = true;
         }
     }
 
-    if (networksFound) {
-        reads++;
-        readsMedian.addValue(highestPower);
+    if (deviceFound && !alarming) {
+        analogWrite(redLedPin, ledIntensity );
+        analogWrite(greenLedPin, 1023); // inverted logic GPIO02
+        if (printMessage) Serial.printf("Alert from %s\n", deviceSSID.c_str());
+
+        alarming = true;
     }
 
-    if(currentMillis - lastNetworkFound >= alarmCheckInterval && reads > 0) {
-        ClearReads();
-        alarmState = 0;
-        pfCounter = 0;
-    } else if (currentMillis - alarmCheckStarts >= alarmCheckInterval || reads == readsSize) {
-        TriggerAlarm();
+
+    if (!deviceFound && alarming) {
+        analogWrite(redLedPin, LOW );
+        analogWrite(greenLedPin, 1023 - ledIntensity); // inverted logic GPIO02
+        if (printMessage) Serial.println("No alert");
+
+        alarming = false;
     }
 
     WiFi.scanDelete();
@@ -264,7 +255,7 @@ void RunSocialDistancer(unsigned long currentMillis) {
 
 void RunOTAUpdate(unsigned long currentMillis) {
 
-    if (ConnectToOpenWifi()) {
+    if (ConnectToWifi()) {
 
         Serial.println("Running OTA - http://www.stomperapp.com/sd/SocialDistancerWiFi.ino.nodemcu.bin");
         t_httpUpdate_return ret = ESPhttpUpdate.update("stomperapp.com", 80, "/sd/SocialDistancerWiFi.ino.nodemcu.bin");
@@ -289,40 +280,6 @@ void RunDataUpload(unsigned long currentMillis) {
 }
 
 ///////////////////////////////////////////////////////////////////////////////////
-
-void TriggerAlarm() {
-
-    byte currentPower = readsMedian.getMedian();
-    if (printMessage) Serial.printf("[%d]\n", currentPower);
-
-    ClearReads();
-
-    if (currentPower >= highAlarmLevel) {
-        alarmState = 1;
-    } else {
-        alarmState = 0;
-        pfCounter = 0;
-    }
-
-    if (alarmState != currentAlarm && printMessage) {
-        currentAlarm = alarmState;
-        ClearFeedback();
-
-        switch(alarmState) {
-            case 1:
-                Serial.printf("HIGH ALARM [%d]\n", currentPower);
-                break;
-            case 2:
-                Serial.printf("LOW [%d]\n", currentPower);
-                break;
-            default:
-                Serial.printf("no alarm\n");
-                break;
-        }
-
-    }
-    alarmCheckStarts = millis();
-}
 
 void PlayLed(unsigned long currentMillis) {
 
@@ -383,13 +340,13 @@ void PlayPhysicalFeedback() {
     switch (pfCounter) {
         case 1:
         case 10:
-            if (toneAlarmActive && 1==2) {
+            if (toneAlarmActive) {
                 analogWrite(piezoPin, onAnalogDutyCycle);
             }
             break;
         case 2:
         case 11:
-            if (vibrationAlarmActive && 1==2) {
+            if (vibrationAlarmActive) {
                 digitalWrite(vibrationPin, HIGH);
             }
             break;
@@ -440,6 +397,10 @@ void ProcessButtonCommand(unsigned long currentMillis) {
             if (printMessage) Serial.printf("O: OTA Update\n");
             operationMode = 2;
             break;
+        case 21111:
+            if (printMessage) Serial.printf("6: Send SMS\n");
+            SendSMS();
+            break;
         case 11221:
             if (printMessage) Serial.printf("Y: Upload alarm data\n");
             UploadAlarmData(currentMillis);
@@ -460,7 +421,7 @@ void Snooze(unsigned long currentMillis) {
 
 ///////////////////////////////////////////////////////////////////////////////////
 
-bool ConnectToOpenWifi() {
+bool ConnectToWifi() {
     bool connected = false;
     /* Clear previous modes. */
     WiFi.softAPdisconnect();
@@ -469,27 +430,131 @@ bool ConnectToOpenWifi() {
 
     delay(shortPush);
 
-    int n = WiFi.scanNetworks(); // sync, hidden
+    if (ConnectToAP(openWiFiSSID)) {
+        return true;
+    }
+    else {
 
-    for (int i = 0; i < n; i++) {
+        int n = WiFi.scanNetworks(); // sync, hidden
 
-        if (printMessage) Serial.printf("Trying to connect to %s\n", WiFi.SSID(i).c_str());
-        WiFi.begin(WiFi.SSID(i));
-        unsigned short tries = 0;
-
-        while (WiFi.status() != WL_CONNECTED && tries < 3) {
-            if (printMessage) Serial.printf("...\n");
-            tries++;
-            delay(longPush * tries);
-        }
-        if(WiFi.status() == WL_CONNECTED) {
-            Serial.printf("Connected to %s\n",  WiFi.SSID(i).c_str());
-            Serial.println(WiFi.localIP());
-            return true;
+        for (int i = 0; i < n; i++) {
+            connected = ConnectToAP(WiFi.SSID(i).c_str());
+            if (connected) {
+                return true;
+            }
         }
     }
-    Serial.println("Couldn't find open WiFi");
+
+    Serial.println("Couldn't connect to any WiFi");
     return false;
+}
+
+bool ConnectToAP(char const* ApSSID){
+
+    if (printMessage) Serial.printf("Trying to connect to %s\n", ApSSID);
+    WiFi.begin(ApSSID);
+    unsigned short tries = 0;
+    while (WiFi.status() != WL_CONNECTED && tries < 3) {
+        if (printMessage) Serial.printf("...\n");
+        tries++;
+        delay(longPush * tries);
+    }
+    if(WiFi.status() == WL_CONNECTED) {
+        Serial.printf("Connected to %s\n", ApSSID);
+        Serial.println(WiFi.localIP());
+        return true;
+    }
+    return false;
+}
+
+void SendSMS() {
+
+    if (ConnectToWifi()) {
+        char *host = "secure.smsgateway.ca";
+        //String url = "secure.smsgateway.ca/SendSMS.aspx?CellNumber=15145854452&AccountKey=" + String(SMS_ACCOUNT_KEY) + "&MessageBody=" + ESP.getSdkVersion();
+        String url = "secure.smsgateway.ca/SendSMS.aspx?CellNumber=15145854452&AccountKey=" + String(SMS_ACCOUNT_KEY) + "&MessageBody=dalerojodale";
+
+        Serial.printf("Using ESP object: %s\n Sending to: %s\n", ESP.getSdkVersion(), url.c_str());
+        int retCode = httpsGET(host, fingerprint, url);
+        if (retCode==HTTP_CODE_OK) {
+            Serial.println("[-] GET succeeded.");
+            PlayFeedbackSequence(2);
+        } else {
+            Serial.printf("[!] failed: %d\n", retCode);
+        }
+    }
+
+    ByeBye();
+}
+
+int httpsGET(char const* host, char const* fingerprint, String url) {
+
+    std::unique_ptr<BearSSL::WiFiClientSecure>client(new BearSSL::WiFiClientSecure);
+    client->setInsecure();
+
+    HTTPClient https;
+
+    Serial.print("[HTTPS] begin...\n");
+    if (https.begin(*client, url)) {  // HTTPS
+
+      Serial.print("[HTTPS] GET...\n");
+      // start connection and send HTTP header
+      int httpCode = https.GET();
+
+      // httpCode will be negative on error
+      if (httpCode > 0) {
+        // HTTP header has been send and Server response header has been handled
+        Serial.printf("[HTTPS] GET... code: %d\n", httpCode);
+
+        // file found at server
+        if (httpCode == HTTP_CODE_OK || httpCode == HTTP_CODE_MOVED_PERMANENTLY) {
+          String payload = https.getString();
+          Serial.println(payload);
+        }
+      } else {
+        Serial.printf("[HTTPS] GET... failed, error: %s\n", https.errorToString(httpCode).c_str());
+      }
+
+      https.end();
+    } else {
+      Serial.printf("[HTTPS] Unable to connect\n");
+    }
+/*
+
+    WiFiClientSecure client;
+    client.setTimeout(15000);
+
+    Serial.printf("Connecting to: %s\n", host);
+
+    bool connected = false;
+    byte retry = 0;
+    while (!connected && retry < 30) {
+        connected = client.connect(host, 443);
+        Serial.print(".");
+        retry++;
+    }
+    if(!connected) {
+        Serial.println("HTTPS connection failed");
+        return -1;
+    }
+
+    // Send GET
+    client.print(String("GET ") + url + " HTTP/1.1\r\n" +
+               "Host: " + host + "\r\n" +
+               "User-Agent: ESP8266\r\n" +
+               "Connection: close\r\n\r\n");
+
+    Serial.println("GET sent");
+    while (client.connected()) {
+        String line = client.readStringUntil('\n');
+        if (line.startsWith("HTTP/1.1")) {
+            // Get HTTP return code
+            return line.substring(9,12).toInt();
+        }
+    }
+
+    return -1;
+    */
 }
 
 ///////////////////////////////////////////////////////////////////////////////////
@@ -508,9 +573,7 @@ void CheckUSB5v(unsigned long currentMillis) {
 void StartUp() {
     PlayFeedbackSequence(2);
     digitalWrite(stayOnPin, HIGH);
-    digitalWrite(vibrationPin, HIGH);
     delay(shortPush);
-    digitalWrite(vibrationPin, LOW);
 }
 
 void PlayFeedbackSequence(byte sequence) {
@@ -527,20 +590,21 @@ void PlayFeedbackSequence(byte sequence) {
             }
             break;
         case 2: // StartUp
-            for (int i=0; i<3 ; i++) {
+            for (int i=0; i<4 ; i++) {
                 analogWrite(redLedPin, ledIntensity);
                 delay(shortPush);
                 analogWrite(redLedPin, 0);
-                analogWrite(yellowLedPin, ledIntensity);
                 delay(shortPush);
-                analogWrite(yellowLedPin, 0);
                 analogWrite(greenLedPin, 1023 - ledIntensity); // inverted logic GPIO02
                 delay(shortPush);
                 analogWrite(greenLedPin, 1023); // inverted logic GPIO02
             }
+            digitalWrite(vibrationPin, HIGH);
+            delay(shortPush);
+            digitalWrite(vibrationPin, LOW);
             break;
         case 3: // OTA
-            for (int i=0; i<3 ; i++) {
+            for (byte i=0; i<3 ; i++) {
                 analogWrite(yellowLedPin, ledIntensity);
                 delay(shortPush);
                 analogWrite(yellowLedPin, 0);
@@ -605,22 +669,6 @@ void ClearFeedback() {
 
     analogWrite(piezoPin, 0);
     digitalWrite(vibrationPin, LOW);
-}
-
-void ClearReads() {
-    for (int i = 0; i<readsSize; i++) {
-        readsMedian.addValue(0);
-    }
-    reads = 0;
-}
-
-int CalculatePercentage(int powerLevel) {
-    return dBmPercentage[abs(powerLevel)];
-}
-
-double CalculateDistance(int wifiPower) {
-  double exp = (27.55 - (20 * log10(wifiChannel.frequency)) + abs(wifiPower)) / 20.0;
-  return pow(10.0, exp);
 }
 
 String MacToString(const unsigned char* mac) {
