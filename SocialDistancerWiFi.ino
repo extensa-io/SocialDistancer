@@ -53,8 +53,8 @@ byte previous = HIGH;
 byte usb5vState;
 
 // Alarms and info notification
-byte highAlarmLevel = 50; // <------------------------ ALARM THRESHOLD
-const byte powerLevel = 75; // <---------------------- POWER LEVEL (0-82)
+byte highAlarmLevel = 70; // <------------------------ ALARM THRESHOLD
+const byte powerLevel = 82; // <---------------------- POWER LEVEL (0-82)
 byte alarmState = 0;
 byte currentAlarm = 0;
 int lowAlarmLevel = 0;
