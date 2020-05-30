@@ -13,12 +13,12 @@ extern "C" {
 char message[100];
 
 // Read
-const byte readsSize = 6;
+const byte readsSize = 5;
 byte reads = 0;
 FastRunningMedian<unsigned int,readsSize, 0> readsMedian;
 
 // Alarm period
-int alarmCheckInterval = 1000; // ms
+int alarmCheckInterval; // ms
 unsigned long alarmCheckStarts = 0;
 const int alarmOnDuration = 250; // high value to keep red LED on during testing
 const int alarmStandByDuration = 250;
@@ -53,7 +53,7 @@ byte previous = HIGH;
 byte usb5vState;
 
 // Alarms and info notification
-byte highAlarmLevel = 70; // <------------------------ ALARM THRESHOLD
+byte highAlarmLevel = 64; // <------------------------ ALARM THRESHOLD
 const byte powerLevel = 82; // <---------------------- POWER LEVEL (0-82)
 byte alarmState = 0;
 byte currentAlarm = 0;
@@ -135,6 +135,7 @@ void setup() {
     ActivateAccessPoint();
 
     feedbackEnabled  = true;
+    alarmCheckInterval = readsSize * 200;
 }
 
 void ActivateAccessPoint() {
@@ -383,13 +384,13 @@ void PlayPhysicalFeedback() {
     switch (pfCounter) {
         case 1:
         case 10:
-            if (toneAlarmActive && 1==2) {
+            if (toneAlarmActive) {
                 analogWrite(piezoPin, onAnalogDutyCycle);
             }
             break;
         case 2:
         case 11:
-            if (vibrationAlarmActive && 1==2) {
+            if (vibrationAlarmActive) {
                 digitalWrite(vibrationPin, HIGH);
             }
             break;
