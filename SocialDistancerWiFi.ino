@@ -51,8 +51,8 @@ byte previous = HIGH;
 byte usb5vState;
 
 // Alarms and info notification
-byte highAlarmLevel = 0; // <------------------------ ALARM THRESHOLD
-const byte powerLevel = 60; // <---------------------- POWER LEVEL (0-82)
+byte highAlarmLevel = 62; // <------------------------ ALARM THRESHOLD
+const byte powerLevel = 82; // <---------------------- POWER LEVEL (0-82)
 byte alarmState = 0;
 byte currentAlarm = 0;
 int lowAlarmLevel = 0;
@@ -227,7 +227,8 @@ void RunSocialDistancer(unsigned long currentMillis) {
     String deviceSSID;
     for (int i = 0; i < n; i++) {
         deviceSSID = WiFi.SSID(i);
-        if (deviceSSID.substring(0,3) == ssid)
+        int readPowerPercentage = 100 - abs(WiFi.RSSI(i));
+        if (deviceSSID.substring(0,3) == ssid && readPowerPercentage > highAlarmLevel)
         {
             deviceFound = true;
         }
