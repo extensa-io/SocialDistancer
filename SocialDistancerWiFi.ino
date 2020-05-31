@@ -6,6 +6,7 @@
 #include "ESP8266httpUpdate.h"
 #include "ESP8266HTTPClient.h"
 #include "WiFiClientSecureBearSSL.h"
+#include "FastRunningMedian.h"
 
 #include "pitches.h"
 #include "env.h"
@@ -14,6 +15,11 @@ extern "C" {
     #include "user_interface.h"
 }
 char message[100];
+
+// Read
+const byte readsSize = 7;
+byte reads = 0;
+FastRunningMedian<unsigned int,readsSize, 0> readsMedian;
 
 // Alarm period
 int alarmCheckInterval = 1000; // ms
@@ -51,8 +57,8 @@ byte previous = HIGH;
 byte usb5vState;
 
 // Alarms and info notification
-byte highAlarmLevel = 64; // <------------------------ ALARM THRESHOLD
-const byte powerLevel = 82; // <---------------------- POWER LEVEL (0-82)
+byte highAlarmLevel = 61; // <------------------------ ALARM THRESHOLD
+const byte powerLevel = 75; // <---------------------- POWER LEVEL (0-82)
 byte alarmState = 0;
 byte currentAlarm = 0;
 int lowAlarmLevel = 0;
@@ -111,8 +117,9 @@ const bool printMessage = true;
 bool alarming = true;
 
 
-const int scanningPeriod = 3000;
+const int scanningPeriod = 2000;
 unsigned long lastScanStart = 0;
+
 ////////////////////////////////////////////////////////////////////////////////////////////
 
 void setup() {
@@ -147,18 +154,16 @@ void ActivateAccessPoint() {
     WiFi.macAddress(mac);
     netName = ssid + MacToString(mac);
 
-    WiFi.enableAP(false);
+    WiFi.enableAP(true);
     delay(200);
     WiFi.mode(WIFI_STA);
 
-    
-    //Serial.println();
-    //Serial.println(WiFi.softAP(netName, "", wifiChannel.channelNumber, false) ? netName + " AP Ready" : "AP Failed!");
+    Serial.println();
+    Serial.println(WiFi.softAP(netName, "", wifiChannel.channelNumber, false) ? netName + " AP Ready" : "AP Failed!");
     
     delay(200);
     Serial.println("AP setup done");
     Serial.println("SOCIAL DISTANCER READY v1.0.1");
-
 }
 
 void loop() {
@@ -203,10 +208,7 @@ void loop() {
     switch(operationMode) {
         case 1:
 
-            if(currentMillis - lastScanStart > scanningPeriod) {
-                lastScanStart = currentMillis;
-                RunSocialDistancer(currentMillis);
-            }      
+            RunSocialDistancer(currentMillis);
         
             break;
         case 2:
@@ -235,17 +237,27 @@ void RunSocialDistancer(unsigned long currentMillis) {
 
     bool deviceFound = false;
     String deviceSSID;
+    int readPowerPercentage;
+    int rssi;
+
     for (int i = 0; i < n; i++) {
         deviceSSID = WiFi.SSID(i);
-        int readPowerPercentage = 100 - abs(WiFi.RSSI(i));
+        rssi = WiFi.RSSI(i);
+
+        readPowerPercentage = 100 - abs(rssi);
         
-        if (printMessage) Serial.printf("Power: %d\n", WiFi.RSSI(i));
-        
-        if (deviceSSID.substring(0,3) == ssid && readPowerPercentage > highAlarmLevel)
+        if (deviceSSID.substring(0,3) == ssid && readPowerPercentage >= highAlarmLevel)
         {
             deviceFound = true;
         }
     }
+
+    if(currentMillis - lastScanStart > scanningPeriod) {
+        lastScanStart = currentMillis;
+        
+        readsMedian.addValue(readPowerPercentage);
+        if (printMessage) Serial.printf("Power: %d  Median: %d\n", rssi, readsMedian.getMedian());
+    }  
 
     if (deviceFound && !alarming) {
         analogWrite(redLedPin, ledIntensity );
@@ -254,7 +266,6 @@ void RunSocialDistancer(unsigned long currentMillis) {
 
         alarming = true;
     }
-
 
     if (!deviceFound && alarming) {
         analogWrite(redLedPin, LOW );
