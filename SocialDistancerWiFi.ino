@@ -51,7 +51,7 @@ byte previous = HIGH;
 byte usb5vState;
 
 // Alarms and info notification
-byte highAlarmLevel = 62; // <------------------------ ALARM THRESHOLD
+byte highAlarmLevel = 64; // <------------------------ ALARM THRESHOLD
 const byte powerLevel = 82; // <---------------------- POWER LEVEL (0-82)
 byte alarmState = 0;
 byte currentAlarm = 0;
@@ -110,6 +110,9 @@ byte operationMode = 1; // 1-SocialDistancer 2-OTA Update 3-Data Upload
 const bool printMessage = true;
 bool alarming = true;
 
+
+const int scanningPeriod = 3000;
+unsigned long lastScanStart = 0;
 ////////////////////////////////////////////////////////////////////////////////////////////
 
 void setup() {
@@ -144,12 +147,14 @@ void ActivateAccessPoint() {
     WiFi.macAddress(mac);
     netName = ssid + MacToString(mac);
 
-    WiFi.enableAP(true);
+    WiFi.enableAP(false);
     delay(200);
     WiFi.mode(WIFI_STA);
 
-    Serial.println();
-    Serial.println(WiFi.softAP(netName, "", wifiChannel.channelNumber, false) ? netName + " AP Ready" : "AP Failed!");
+    
+    //Serial.println();
+    //Serial.println(WiFi.softAP(netName, "", wifiChannel.channelNumber, false) ? netName + " AP Ready" : "AP Failed!");
+    
     delay(200);
     Serial.println("AP setup done");
     Serial.println("SOCIAL DISTANCER READY v1.0.1");
@@ -159,7 +164,7 @@ void ActivateAccessPoint() {
 void loop() {
     unsigned long currentMillis = millis();
 
-    CheckUSB5v(currentMillis);
+    //CheckUSB5v(currentMillis);
 
     unbounce = digitalRead(buttonPin);
     delay(25);
@@ -197,7 +202,12 @@ void loop() {
 
     switch(operationMode) {
         case 1:
-            RunSocialDistancer(currentMillis);
+
+            if(currentMillis - lastScanStart > scanningPeriod) {
+                lastScanStart = currentMillis;
+                RunSocialDistancer(currentMillis);
+            }      
+        
             break;
         case 2:
             RunOTAUpdate(currentMillis);
@@ -228,6 +238,9 @@ void RunSocialDistancer(unsigned long currentMillis) {
     for (int i = 0; i < n; i++) {
         deviceSSID = WiFi.SSID(i);
         int readPowerPercentage = 100 - abs(WiFi.RSSI(i));
+        
+        if (printMessage) Serial.printf("Power: %d\n", WiFi.RSSI(i));
+        
         if (deviceSSID.substring(0,3) == ssid && readPowerPercentage > highAlarmLevel)
         {
             deviceFound = true;
