@@ -17,7 +17,7 @@ extern "C" {
 char message[100];
 
 // Read
-const byte readsSize = 7;
+const byte readsSize = 15;
 byte reads = 0;
 FastRunningMedian<unsigned int,readsSize, 0> readsMedian;
 
@@ -57,8 +57,8 @@ byte previous = HIGH;
 byte usb5vState;
 
 // Alarms and info notification
-byte highAlarmLevel = 61; // <------------------------ ALARM THRESHOLD
-const byte powerLevel = 75; // <---------------------- POWER LEVEL (0-82)
+byte highAlarmLevel = 58; // <------------------------ ALARM THRESHOLD
+const byte powerLevel = 82; // <---------------------- POWER LEVEL (0-82)
 byte alarmState = 0;
 byte currentAlarm = 0;
 int lowAlarmLevel = 0;
@@ -163,7 +163,7 @@ void ActivateAccessPoint() {
     
     delay(200);
     Serial.println("AP setup done");
-    Serial.println("SOCIAL DISTANCER READY v1.0.1");
+    Serial.printf("SOCIAL DISTANCER READY v1.0.1 %s\n", ESP.getSdkVersion());
 }
 
 void loop() {
@@ -244,9 +244,10 @@ void RunSocialDistancer(unsigned long currentMillis) {
         deviceSSID = WiFi.SSID(i);
         rssi = WiFi.RSSI(i);
 
-        readPowerPercentage = 100 - abs(rssi);
+        readPowerPercentage = 100 - abs(rssi);        
+        readsMedian.addValue(readPowerPercentage);
         
-        if (deviceSSID.substring(0,3) == ssid && readPowerPercentage >= highAlarmLevel)
+        if (deviceSSID.substring(0,3) == ssid && readsMedian.getMedian() >= highAlarmLevel)
         {
             deviceFound = true;
         }
@@ -255,7 +256,7 @@ void RunSocialDistancer(unsigned long currentMillis) {
     if(currentMillis - lastScanStart > scanningPeriod) {
         lastScanStart = currentMillis;
         
-        readsMedian.addValue(readPowerPercentage);
+        //readsMedian.addValue(readPowerPercentage);
         if (printMessage) Serial.printf("Power: %d  Median: %d\n", rssi, readsMedian.getMedian());
     }  
 
