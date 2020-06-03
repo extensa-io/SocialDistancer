@@ -17,7 +17,7 @@ extern "C" {
 char message[100];
 
 // Read
-const byte readsSize = 15;
+const byte readsSize = 11;
 byte reads = 0;
 FastRunningMedian<unsigned int,readsSize, 0> readsMedian;
 
@@ -57,8 +57,9 @@ byte previous = HIGH;
 byte usb5vState;
 
 // Alarms and info notification
-byte highAlarmLevel = 58; // <------------------------ ALARM THRESHOLD
-const byte powerLevel = 82; // <---------------------- POWER LEVEL (0-82)
+byte highAlarmLevel = 59; // <-------------------------- HIGH ALARM THRESHOLD
+byte mediumAlarmLevel = 50; // <------------------------ MEDIUM ALARM THRESHOLD
+const byte powerLevel = 82; // <------------------------ POWER LEVEL (0-82)
 byte alarmState = 0;
 byte currentAlarm = 0;
 int lowAlarmLevel = 0;
@@ -114,8 +115,7 @@ unsigned long snoozeStart = 0;
 byte operationMode = 1; // 1-SocialDistancer 2-OTA Update 3-Data Upload
 
 const bool printMessage = true;
-bool alarming = true;
-
+String alarming;
 
 const int scanningPeriod = 2000;
 unsigned long lastScanStart = 0;
@@ -145,6 +145,7 @@ void setup() {
 
     ActivateAccessPoint();
 
+    analogWrite(greenLedPin, 1023 - ledIntensity); // inverted logic GPIO02
     feedbackEnabled  = true;
 }
 
@@ -160,7 +161,7 @@ void ActivateAccessPoint() {
 
     Serial.println();
     Serial.println(WiFi.softAP(netName, "", wifiChannel.channelNumber, false) ? netName + " AP Ready" : "AP Failed!");
-    
+
     delay(200);
     Serial.println("AP setup done");
     Serial.printf("SOCIAL DISTANCER READY v1.0.1 %s\n", ESP.getSdkVersion());
@@ -209,7 +210,7 @@ void loop() {
         case 1:
 
             RunSocialDistancer(currentMillis);
-        
+
             break;
         case 2:
             RunOTAUpdate(currentMillis);
@@ -235,45 +236,45 @@ void RunSocialDistancer(unsigned long currentMillis) {
 
     int n = WiFi.scanNetworks(false, false, wifiChannel.channelNumber); // sync, not hidden
 
-    bool deviceFound = false;
+    int highestPower = 0, readPowerPercentage = 0;
+    bool networksFound = false;
     String deviceSSID;
-    int readPowerPercentage;
-    int rssi;
 
     for (int i = 0; i < n; i++) {
-        deviceSSID = WiFi.SSID(i);
-        rssi = WiFi.RSSI(i);
-
-        readPowerPercentage = 100 - abs(rssi);        
-        readsMedian.addValue(readPowerPercentage);
-        
-        if (deviceSSID.substring(0,3) == ssid && readsMedian.getMedian() >= highAlarmLevel)
+        if (WiFi.SSID(i).substring(0,3) == ssid)
         {
-            deviceFound = true;
+            readPowerPercentage = 100 - abs(WiFi.RSSI(i));
+
+            if (readPowerPercentage > highestPower) {
+                highestPower = readPowerPercentage;
+                deviceSSID = WiFi.SSID(i);
+            }
+            lastNetworkFound = currentMillis;
+
+            networksFound = true;
         }
+    }
+
+    if (networksFound) {
+        readsMedian.addValue(highestPower);
+    }
+
+    ClearFeedback();
+    if (highestPower >= highAlarmLevel) {
+        analogWrite(redLedPin, ledIntensity);
+        alarming = "ALARM";
+    } else if (highestPower >= mediumAlarmLevel) {
+        analogWrite(yellowLedPin, ledIntensity);
+        alarming = "WARNING";
+    } else {
+        analogWrite(greenLedPin, 1023 - ledIntensity);
+        alarming = "No alarm";
     }
 
     if(currentMillis - lastScanStart > scanningPeriod) {
         lastScanStart = currentMillis;
-        
-        //readsMedian.addValue(readPowerPercentage);
-        if (printMessage) Serial.printf("Power: %d  Median: %d\n", rssi, readsMedian.getMedian());
-    }  
 
-    if (deviceFound && !alarming) {
-        analogWrite(redLedPin, ledIntensity );
-        analogWrite(greenLedPin, 1023); // inverted logic GPIO02
-        if (printMessage) Serial.printf("Alert from %s\n", deviceSSID.c_str());
-
-        alarming = true;
-    }
-
-    if (!deviceFound && alarming) {
-        analogWrite(redLedPin, LOW );
-        analogWrite(greenLedPin, 1023 - ledIntensity); // inverted logic GPIO02
-        if (printMessage) Serial.println("No alert");
-
-        alarming = false;
+        if (printMessage) Serial.printf("%s - Closest device: %s Power: %d  Median: %d\n", alarming.c_str(), deviceSSID.c_str(), highestPower, readsMedian.getMedian());
     }
 
     WiFi.scanDelete();
